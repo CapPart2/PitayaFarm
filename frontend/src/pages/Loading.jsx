@@ -1,17 +1,147 @@
 import { motion } from 'framer-motion'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+
+const HEALTH_URL = `${import.meta.env.VITE_API_BASE_URL || window.location.origin}/health`
+const MIN_PROGRESS_WHEN_ONLINE = 15
+const BASE_DURATION_MS = 5200
+const OFFLINE_MESSAGE = 'Offline. Waiting for connection...'
 
 export default function Loading() {
   const navigate = useNavigate()
   const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
+  const [progress, setProgress] = useState(0)
+  const [connectionLabel, setConnectionLabel] = useState('Checking connection...')
+  const [isOnline, setIsOnline] = useState(navigator.onLine)
+  const [isBackendReachable, setIsBackendReachable] = useState(false)
+  const onlineRef = useRef(navigator.onLine)
+  const backendReachableRef = useRef(false)
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      navigate('/landing', { replace: true })
-    }, 10000)
+    const handleOnline = () => setIsOnline(true)
+    const handleOffline = () => setIsOnline(false)
 
-    return () => window.clearTimeout(timer)
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+
+    return () => {
+      window.removeEventListener('online', handleOnline)
+      window.removeEventListener('offline', handleOffline)
+    }
+  }, [])
+
+  useEffect(() => {
+    let animationFrameId = 0
+    let pollTimer = 0
+    let lastFrameTime = 0
+    let accumulatedOnlineMs = 0
+    let mounted = true
+
+    const updateConnectionLabel = (online, backendReachable) => {
+      if (!online) {
+        setConnectionLabel(OFFLINE_MESSAGE)
+        return
+      }
+
+      if (!backendReachable) {
+        setConnectionLabel('Connection restored, verifying backend...')
+        return
+      }
+
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
+      const effectiveType = String(connection?.effectiveType || '').toLowerCase()
+
+      if (effectiveType.includes('slow-2g')) {
+        setConnectionLabel('Connected on a very slow network')
+      } else if (effectiveType.includes('2g')) {
+        setConnectionLabel('Connected on a slow network')
+      } else if (effectiveType.includes('3g')) {
+        setConnectionLabel('Connected on a moderate network')
+      } else if (effectiveType.includes('4g')) {
+        setConnectionLabel('Connected on a fast network')
+      } else {
+        setConnectionLabel('Connected. Loading your workspace...')
+      }
+    }
+
+    const verifyBackend = async () => {
+      if (!onlineRef.current) {
+        if (mounted) {
+          setIsBackendReachable(false)
+          backendReachableRef.current = false
+          updateConnectionLabel(false, false)
+        }
+        return false
+      }
+
+      try {
+        const response = await fetch(HEALTH_URL, { cache: 'no-store' })
+        const reachable = response.ok
+
+        if (mounted) {
+          setIsBackendReachable(reachable)
+          backendReachableRef.current = reachable
+          updateConnectionLabel(true, reachable)
+        }
+
+        return reachable
+      } catch {
+        if (mounted) {
+          setIsBackendReachable(false)
+          backendReachableRef.current = false
+          updateConnectionLabel(true, false)
+        }
+
+        return false
+      }
+    }
+
+    const tick = (now) => {
+      if (!mounted) return
+
+      if (!lastFrameTime) {
+        lastFrameTime = now
+      }
+
+      const delta = now - lastFrameTime
+      lastFrameTime = now
+      const online = onlineRef.current
+      const backendReachable = backendReachableRef.current
+
+      if (online && backendReachable) {
+        accumulatedOnlineMs += delta
+      }
+
+      const targetProgress = online && backendReachable
+        ? Math.min(100, Math.max(MIN_PROGRESS_WHEN_ONLINE, (accumulatedOnlineMs / BASE_DURATION_MS) * 100))
+        : 0
+
+      setProgress((current) => (targetProgress > current ? targetProgress : current))
+
+      if (online && backendReachable && accumulatedOnlineMs >= BASE_DURATION_MS) {
+        navigate('/landing', { replace: true })
+        return
+      }
+
+      animationFrameId = window.requestAnimationFrame(tick)
+    }
+
+    const runHealthPoll = async () => {
+      await verifyBackend()
+      if (mounted) {
+        pollTimer = window.setTimeout(runHealthPoll, onlineRef.current ? 2000 : 1000)
+      }
+    }
+
+    updateConnectionLabel(onlineRef.current, false)
+    runHealthPoll()
+    animationFrameId = window.requestAnimationFrame(tick)
+
+    return () => {
+      mounted = false
+      window.cancelAnimationFrame(animationFrameId)
+      window.clearTimeout(pollTimer)
+    }
   }, [navigate])
 
   return (
@@ -52,17 +182,18 @@ export default function Loading() {
                 aria-label="Loading"
                 aria-valuemin={0}
                 aria-valuemax={100}
+                aria-valuenow={Math.round(progress)}
               >
                 <motion.div
                   className="h-full bg-pitaya-mint"
-                  initial={{ width: '0%' }}
-                  animate={{ width: '100%' }}
-                  transition={{ duration: 10, ease: 'linear' }}
+                  initial={false}
+                  animate={{ width: `${progress}%` }}
+                  transition={{ duration: 0.12, ease: 'linear' }}
                 />
               </div>
               <div className="mt-4 flex items-center justify-center gap-2 text-sm text-gray-700 dark:text-gray-200">
                 <span className="inline-flex h-4 w-4 rounded-full border-2 border-pitaya-leaf border-t-transparent animate-spin" aria-hidden />
-                <span className="font-medium">Initializing PITAYA…</span>
+                <span className="font-medium">{connectionLabel}</span>
               </div>
             </div>
           </div>
