@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ disease.name }} – PITAYA</title>
+{% load static %}
+    <link rel="stylesheet" href="{% static 'css/pitaya-theme.css' %}">
+    <style>.disease-header{background:var(--pitaya-green-50);padding:var(--pitaya-space-lg);border-radius:var(--pitaya-radius-lg);margin-bottom:var(--pitaya-space-lg);}.disease-name{font-size:1.75rem;font-weight:800;color:var(--pitaya-green-700);margin:0 0 8px;}.back-link{display:inline-block;margin-bottom:var(--pitaya-space-lg);color:var(--pitaya-green-700);text-decoration:none;font-weight:600;}.photo-gallery{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px;}.photo-item{position:relative;width:100%;padding-top:100%;background:var(--pitaya-border-light);border-radius:var(--pitaya-radius-md);overflow:hidden;}.gallery-image{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;cursor:pointer;}.lightbox{display:none;position:fixed;z-index:1000;inset:0;background:rgba(0,0,0,0.9);cursor:pointer;}.lightbox-content{margin:auto;display:block;width:90%;max-width:900px;margin-top:5%;}.lightbox-close{position:absolute;top:15px;right:35px;color:#f1f1f1;font-size:40px;cursor:pointer;}</style>
+</head>
+<body>
+<div class="pitaya-layout">
+    <div class="pitaya-sidebar-overlay" id="sidebarOverlay" onclick="document.getElementById('sidebar').classList.remove('is-open');document.getElementById('sidebarOverlay').classList.remove('is-open');"></div>
+    <aside class="pitaya-sidebar" id="sidebar">
+        <div class="pitaya-sidebar-brand"><img src="{% static 'ab.png' %}" alt="PITAYA"><span>PITAYA</span></div>
+        <nav class="pitaya-nav">
+            <a href="/"><span class="nav-icon">📊</span> Dashboard</a>
+            <a href="/identify/"><span class="nav-icon">🔍</span> Disease Detection</a>
+            <a href="/library/"><span class="nav-icon">📚</span> Library</a>
+            <a href="/alerts/"><span class="nav-icon">🔔</span> Alerts</a>
+            <a href="/overview/"><span class="nav-icon">📈</span> Yield Prediction</a>
+            <a href="/report/"><span class="nav-icon">📄</span> Reports</a>
+            <a href="/profile/"><span class="nav-icon">👤</span> Profile</a>
+            <a href="#" class="nav-logout"><span class="nav-icon">🚪</span> Logout</a>
+        </nav>
+    </aside>
+    <div class="pitaya-main">
+        <header class="pitaya-topbar">
+            <button class="pitaya-menu-toggle" type="button" aria-label="Menu" onclick="document.getElementById('sidebar').classList.toggle('is-open');document.getElementById('sidebarOverlay').classList.toggle('is-open');">☰</button>
+            <div class="pitaya-topbar-title">Disease Details</div>
+        </header>
+        <div class="pitaya-content">
+            <div class="pitaya-shell">
+                <a href="/library/" class="back-link">← Back to Library</a>
+                
+                <div class="disease-header">
+                    <h1 class="disease-name">{{ disease.name }}</h1>
+                </div>
+
+                {% if image_url %}
+                <div class="pitaya-card">
+                    <img src="{{ image_url }}" alt="{{ disease.name }}" style="width: 100%; max-width: 500px; border-radius: var(--pitaya-radius-md); margin-bottom: 12px;">
+                </div>
+                {% endif %}
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">View More Photos</h2>
+                    {% if additional_images|length > 0 %}
+                    <div class="photo-gallery">
+                        {% for img in additional_images %}
+                        <div class="photo-item">
+                            <img src="{{ img.url }}" alt="{{ disease.name }} - {{ img.filename }}" class="gallery-image" onclick="openLightbox('{{ img.url }}')" onerror="this.onerror=null; this.parentElement.style.display='none';">
+                        </div>
+                        {% endfor %}
+                    </div>
+                    <p class="pitaya-card-subtitle" style="margin-top: 12px;">Showing {{ additional_images|length }} different images of {{ disease.name }}. Click any image to view larger.</p>
+                    {% else %}
+                    <p class="pitaya-card-subtitle" style="font-style: italic;">Loading images from dataset...</p>
+                    {% endif %}
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Affected Plant Part</h2>
+                    <p style="margin: 0; font-weight: 600; color: var(--pitaya-green-700);">{{ disease.get_affected_plant_part_display }}</p>
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Symptoms</h2>
+                    <p style="margin: 0; line-height: 1.6;">{{ disease.symptoms|linebreaks }}</p>
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Causes</h2>
+                    <p style="margin: 0; line-height: 1.6;">{{ disease.causes|linebreaks }}</p>
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Prevention Methods</h2>
+                    <div style="margin: 0; line-height: 1.6;">{{ disease.prevention_methods|linebreaks }}</div>
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Treatment Recommendations</h2>
+                    <div style="margin: 0; line-height: 1.6;">{{ disease.treatment_recommendations|linebreaks }}</div>
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Need Help?</h2>
+                    <p style="margin: 0;">
+                        <a href="/identify/" style="color: var(--pitaya-green-700); text-decoration: none; font-weight: 600;">Upload an image to identify diseases</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Lightbox Modal -->
+<div id="lightbox" class="lightbox" onclick="closeLightbox()">
+    <span class="lightbox-close">&times;</span>
+    <img class="lightbox-content" id="lightbox-img">
+</div>
+
+<script>
+function openLightbox(imageSrc) {
+    const lightbox = document.getElementById('lightbox');
+    const lightboxImg = document.getElementById('lightbox-img');
+    lightbox.style.display = 'block';
+    lightboxImg.src = imageSrc;
+}
+
+function closeLightbox() {
+    document.getElementById('lightbox').style.display = 'none';
+}
+
+// Close lightbox on Escape key
+document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape') {
+        closeLightbox();
+    }
+});
+</script>
+</body>
+</html>

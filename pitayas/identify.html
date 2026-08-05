@@ -1,0 +1,308 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Disease Detection – PITAYA: Plant Illness Tracking and Automated Yield Analysis</title>
+    <link rel="stylesheet" href="{% static 'css/pitaya-theme.css' %}">
+    <style>
+        .identify-layout { display: grid; grid-template-columns: 1fr 1fr; gap: var(--pitaya-space-xl); align-items: start; }
+        @media (max-width: 900px) { .identify-layout { grid-template-columns: 1fr; } }
+        .camera-tabs { display: flex; gap: 8px; margin-bottom: var(--pitaya-space-md); }
+        .camera-tabs button { flex: 1; padding: 12px; border: 2px solid var(--pitaya-border); border-radius: var(--pitaya-radius-md); background: var(--pitaya-surface); font-weight: 600; cursor: pointer; transition: all var(--pitaya-transition); }
+        .camera-tabs button.active { border-color: var(--pitaya-green-600); background: var(--pitaya-green-50); color: var(--pitaya-green-700); }
+        .camera-tabs button:hover:not(.active) { border-color: var(--pitaya-green-400); }
+        #cameraPreview { display: none; width: 100%; max-height: 320px; object-fit: contain; border-radius: var(--pitaya-radius-md); background: #111; }
+        .capture-actions { margin-top: var(--pitaya-space-md); display: flex; gap: 8px; flex-wrap: wrap; }
+        .result-severity { margin-top: 8px; }
+        .result-info-block { margin-top: 12px; padding: 12px; background: var(--pitaya-green-50); border-radius: var(--pitaya-radius-md); font-size: 0.9rem; }
+        .result-info-block strong { display: block; margin-bottom: 4px; color: var(--pitaya-text); }
+    </style>
+</head>
+<body>
+<div class="pitaya-layout">
+    <div class="pitaya-sidebar-overlay" id="sidebarOverlay" onclick="document.getElementById('sidebar').classList.remove('is-open'); document.getElementById('sidebarOverlay').classList.remove('is-open');"></div>
+    <aside class="pitaya-sidebar" id="sidebar">
+        <div class="pitaya-sidebar-brand">
+            <img src="{% static 'ab.png' %}" alt="PITAYA logo">
+            <span>PITAYA</span>
+        </div>
+        <nav class="pitaya-nav">
+            <a href="/"><span class="nav-icon">📊</span> Dashboard</a>
+            <a href="/identify/"><span class="nav-icon">🔍</span> Disease Detection</a>
+            <a href="/library/"><span class="nav-icon">📚</span> Library</a>
+            <a href="/alerts/"><span class="nav-icon">🔔</span> Alerts</a>
+            <a href="/overview/"><span class="nav-icon">📈</span> Yield Prediction</a>
+            <a href="/report/"><span class="nav-icon">📄</span> Reports</a>
+            <a href="/profile/"><span class="nav-icon">👤</span> Profile</a>
+            <a href="#" class="nav-logout"><span class="nav-icon">🚪</span> Logout</a>
+        </nav>
+    </aside>
+
+    <div class="pitaya-main">
+        <header class="pitaya-topbar">
+            <button class="pitaya-menu-toggle" type="button" aria-label="Toggle menu" onclick="document.getElementById('sidebar').classList.toggle('is-open'); document.getElementById('sidebarOverlay').classList.toggle('is-open');">☰</button>
+            <div class="pitaya-topbar-title">Disease Detection</div>
+        </header>
+
+        <div class="pitaya-content">
+            <div class="pitaya-shell">
+                <h1 class="pitaya-page-title">Identify Plant Disease</h1>
+                <p class="pitaya-card-subtitle" style="margin-bottom: var(--pitaya-space-lg);">Upload a leaf or stem image, or capture with camera, to detect potential diseases.</p>
+
+                <div class="identify-layout">
+                    <div class="pitaya-card">
+                        <h2 class="pitaya-card-title">📷 Image Input</h2>
+                        <div class="camera-tabs">
+                            <button type="button" class="active" data-tab="upload">Upload</button>
+                            <button type="button" data-tab="camera">Camera</button>
+                        </div>
+
+                        <div id="uploadPanel">
+                            <div class="pitaya-upload-zone" id="uploadArea" onclick="document.getElementById('imageInput').click()">
+                                <div class="upload-icon">🖼️</div>
+                                <p class="upload-text">Click to upload or drag and drop</p>
+                                <p class="upload-hint">PNG, JPG, JPEG up to 10MB</p>
+                            </div>
+                            <input type="file" id="imageInput" class="upload-input" accept="image/*" style="display: none;">
+                        </div>
+
+                        <div id="cameraPanel" style="display: none;">
+                            <video id="cameraPreview" autoplay playsinline muted></video>
+                            <div class="capture-actions">
+                                <button type="button" class="pitaya-btn pitaya-btn-primary" id="startCameraBtn">Start camera</button>
+                                <button type="button" class="pitaya-btn pitaya-btn-secondary" id="captureBtn" disabled>Capture</button>
+                                <button type="button" class="pitaya-btn pitaya-btn-ghost" id="stopCameraBtn" style="display: none;">Stop</button>
+                            </div>
+                            <canvas id="captureCanvas" style="display: none;"></canvas>
+                        </div>
+
+                        <div class="pitaya-card" style="margin-top: var(--pitaya-space-lg); padding: var(--pitaya-space-md); background: var(--pitaya-green-50); display: none;" id="imagePreviewWrap">
+                            <p class="pitaya-card-title" style="margin-bottom: 8px;">Preview</p>
+                            <img id="previewImg" src="" alt="Preview" style="max-width: 100%; max-height: 280px; border-radius: var(--pitaya-radius-md);">
+                        </div>
+
+                        <div id="loading" class="pitaya-loading-text" style="display: none; margin-top: var(--pitaya-space-lg);">
+                            <div class="pitaya-spinner"></div>
+                            <p>Analyzing image...</p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="pitaya-card">
+                            <h2 class="pitaya-card-title">📋 Result</h2>
+                            <p class="pitaya-card-subtitle">Disease name, confidence, and severity will appear here after analysis.</p>
+                            <div id="result"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+  const uploadArea = document.getElementById('uploadArea');
+  const imageInput = document.getElementById('imageInput');
+  const imagePreviewWrap = document.getElementById('imagePreviewWrap');
+  const previewImg = document.getElementById('previewImg');
+  const loading = document.getElementById('loading');
+  const result = document.getElementById('result');
+
+  const uploadPanel = document.getElementById('uploadPanel');
+  const cameraPanel = document.getElementById('cameraPanel');
+  document.querySelectorAll('.camera-tabs button').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      document.querySelector('.camera-tabs button.active').classList.remove('active');
+      this.classList.add('active');
+      const tab = this.getAttribute('data-tab');
+      uploadPanel.style.display = tab === 'upload' ? 'block' : 'none';
+      cameraPanel.style.display = tab === 'camera' ? 'block' : 'none';
+      if (tab !== 'camera') stopCamera();
+    });
+  });
+
+  let stream = null;
+  const cameraPreview = document.getElementById('cameraPreview');
+  const captureCanvas = document.getElementById('captureCanvas');
+  const startCameraBtn = document.getElementById('startCameraBtn');
+  const captureBtn = document.getElementById('captureBtn');
+  const stopCameraBtn = document.getElementById('stopCameraBtn');
+
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(function(t) { t.stop(); });
+      stream = null;
+    }
+    cameraPreview.style.display = 'none';
+    cameraPreview.srcObject = null;
+    startCameraBtn.style.display = 'inline-flex';
+    captureBtn.disabled = true;
+    stopCameraBtn.style.display = 'none';
+  }
+
+  startCameraBtn.addEventListener('click', function() {
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function(s) {
+      stream = s;
+      cameraPreview.srcObject = s;
+      cameraPreview.style.display = 'block';
+      startCameraBtn.style.display = 'none';
+      captureBtn.disabled = false;
+      stopCameraBtn.style.display = 'inline-flex';
+    }).catch(function() {
+      alert('Camera access is not available.');
+    });
+  });
+
+  stopCameraBtn.addEventListener('click', stopCamera);
+
+  captureBtn.addEventListener('click', function() {
+    const w = cameraPreview.videoWidth;
+    const h = cameraPreview.videoHeight;
+    captureCanvas.width = w;
+    captureCanvas.height = h;
+    captureCanvas.getContext('2d').drawImage(cameraPreview, 0, 0);
+    captureCanvas.toBlob(function(blob) {
+      const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' });
+      handleImageSelect(file);
+    }, 'image/jpeg', 0.9);
+  });
+
+  uploadArea.addEventListener('dragover', function(e) { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+  uploadArea.addEventListener('dragleave', function() { uploadArea.classList.remove('drag-over'); });
+  uploadArea.addEventListener('drop', function(e) {
+    e.preventDefault();
+    uploadArea.classList.remove('drag-over');
+    if (e.dataTransfer.files[0]) {
+      imageInput.files = e.dataTransfer.files;
+      handleImageSelect(e.dataTransfer.files[0]);
+    }
+  });
+
+  imageInput.addEventListener('change', function(e) {
+    if (e.target.files[0]) handleImageSelect(e.target.files[0]);
+  });
+
+  function handleImageSelect(file) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      previewImg.src = e.target.result;
+      imagePreviewWrap.style.display = 'block';
+    };
+    reader.readAsDataURL(file);
+    predict(file);
+  }
+
+  function predict(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]') ? document.querySelector('[name=csrfmiddlewaretoken]').value : getCookie('csrftoken');
+    loading.style.display = 'block';
+    result.innerHTML = '';
+
+    fetch('/predict/', {
+      method: 'POST',
+      body: formData,
+      headers: { 'X-CSRFToken': csrftoken }
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      loading.style.display = 'none';
+      if (data.error) showError(data.error);
+      else showResult(data);
+    })
+    .catch(function(err) {
+      loading.style.display = 'none';
+      showError('Error: ' + err.message);
+    });
+  }
+
+  function getCookie(name) {
+    let v = null;
+    if (document.cookie && document.cookie !== '') {
+      document.cookie.split(';').forEach(function(c) {
+        c = c.trim();
+        if (c.indexOf(name + '=') === 0) v = decodeURIComponent(c.substring(name.length + 1));
+      });
+    }
+    return v;
+  }
+
+  function severityFromConfidence(conf) {
+    if (conf >= 85) return { label: 'High confidence', cls: 'mild' };
+    if (conf >= 70) return { label: 'Moderate', cls: 'moderate' };
+    return { label: 'Low confidence', cls: 'severe' };
+  }
+
+  function showResult(data) {
+    const confidence = parseFloat(data.predicted_class_acuracy);
+    const confidenceFixed = confidence.toFixed(1);
+    const diseaseName = data.predicted_class_name;
+    const diseaseInfo = data.disease_info || {};
+    const confidenceLevel = data.confidence_level || 'medium';
+    const confidenceWarning = data.confidence_warning || false;
+    const confidenceMessage = data.confidence_message || '';
+    const topPredictions = data.top_predictions || [];
+    const severity = severityFromConfidence(confidence);
+
+    let cardClass = 'pitaya-result-card';
+    if (confidenceLevel === 'low') cardClass += ' result-danger';
+    else if (confidenceLevel === 'medium') cardClass += ' result-warning';
+
+    let confClass = 'high';
+    if (confidenceLevel === 'low') confClass = 'low';
+    else if (confidenceLevel === 'medium') confClass = 'medium';
+
+    let html = '<div class="' + cardClass + '">';
+    html += '<div class="result-disease-name">🌿 ' + diseaseName + '</div>';
+    html += '<div class="result-confidence ' + confClass + '">Confidence: <strong>' + confidenceFixed + '%</strong></div>';
+    html += '<div class="result-severity"><span class="pitaya-severity-badge ' + severity.cls + '">' + severity.label + '</span></div>';
+
+    if (confidenceWarning && confidenceMessage) {
+      html += '<div class="result-info-block" style="background: #fee2e2; margin-top: 12px;">';
+      html += '<strong>⚠️ Low confidence</strong>' + confidenceMessage + '</div>';
+    } else if (confidenceMessage) {
+      html += '<div class="result-info-block" style="margin-top: 8px;">' + confidenceMessage + '</div>';
+    }
+
+    if (confidenceWarning && topPredictions.length > 0) {
+      html += '<div class="result-info-block" style="background: #fef3c7; margin-top: 12px;">';
+      html += '<strong>Top 3 possible diseases</strong><ul style="margin: 8px 0 0; padding-left: 20px;">';
+      topPredictions.forEach(function(p, i) {
+        html += '<li>' + p.name + ': ' + p.confidence.toFixed(1) + '%</li>';
+      });
+      html += '</ul></div>';
+    }
+
+    if (diseaseInfo.symptoms) {
+      html += '<div class="result-info-block" style="margin-top: 16px;">';
+      html += '<strong>Affected part</strong>' + (diseaseInfo.affected_part || 'Unknown') + '</div>';
+      html += '<div class="result-info-block"><strong>Symptoms</strong>' + (diseaseInfo.symptoms || 'Not available') + '</div>';
+      html += '<div class="result-info-block"><strong>Causes</strong>' + (diseaseInfo.causes || 'Not available') + '</div>';
+      html += '<div class="result-info-block"><strong>Prevention</strong>' + (diseaseInfo.prevention || 'Not available') + '</div>';
+      html += '<div class="result-info-block"><strong>Treatment</strong>' + (diseaseInfo.treatment || 'Not available') + '</div>';
+    }
+
+    if (data.rounded_predictions && data.rounded_predictions.length) {
+      const names = ['Anthracnose', 'Black Spot', 'Brown Spot', 'Root Rot', 'Soft Rot', 'Stem Rot', 'Stem_Canker', 'Twig Blight', 'White Spot'];
+      html += '<details style="margin-top: 16px; font-size: 0.85rem;"><summary style="cursor: pointer; color: var(--pitaya-text-muted); font-weight: 600;">Show all predictions</summary><ul style="margin: 8px 0 0; padding-left: 20px;">';
+      data.rounded_predictions.forEach(function(p, i) {
+        html += '<li>' + (names[i] || '') + ': ' + parseFloat(p).toFixed(1) + '%</li>';
+      });
+      html += '</ul></details>';
+    }
+    html += '</div>';
+
+    result.innerHTML = html;
+  }
+
+  function showError(message) {
+    result.innerHTML = '<div class="pitaya-result-card result-danger"><div class="result-disease-name">❌ Error</div><p style="margin: 0;">' + message + '</p></div>';
+  }
+})();
+</script>
+<form style="display: none;">{% csrf_token %}</form>
+</body>
+</html>

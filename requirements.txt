@@ -1,0 +1,34 @@
+# PITAYA Backend - Production Requirements
+# Plant Illness Tracking and Automated Yield Analysis System
+
+# Web Framework
+Flask==3.0.0
+flask-cors==4.0.0
+
+# Production Server
+gunicorn==26.0.0
+
+# Machine Learning
+tensorflow==2.15.0
+numpy==1.24.3
+Pillow==10.1.0
+
+# Database
+# SQLite is built-in, but for production consider:
+# psycopg2-binary==2.9.9  # PostgreSQL
+# mysql-connector-python==8.2.0  # MySQL
+
+# HTTP Requests
+requests==2.31.0
+
+# Data Processing
+pandas==2.1.3
+
+# Environment Variables
+python-dotenv==1.0.0
+
+# Logging
+# python-json-logger==2.0.7
+
+# Security
+# werkzeug==3.0.1

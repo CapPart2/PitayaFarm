@@ -1,0 +1,255 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    font-size: 16px;
+  }
+  body {
+    @apply font-sans text-gray-800 bg-gray-50 antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* Touch-friendly: ensure interactive elements have min height */
+  button, a, [role="button"] {
+    @apply touch-manipulation;
+  }
+  
+  /* Dark mode base styles */
+  .dark body {
+    @apply bg-gray-900 text-gray-100;
+  }
+  
+  /* Dark mode scrollbar */
+  .dark ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  .dark ::-webkit-scrollbar-track {
+    @apply bg-gray-800;
+  }
+  
+  .dark ::-webkit-scrollbar-thumb {
+    @apply bg-gray-600 rounded-full;
+  }
+  
+  .dark ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gray-500;
+  }
+  
+  /* Dark mode selection */
+  .dark ::selection {
+    @apply bg-green-600 text-gray-900;
+  }
+  
+  /* Dark mode focus styles */
+  .dark *:focus {
+    @apply outline-none ring-2 ring-green-500 ring-offset-2 ring-offset-gray-900;
+  }
+}
+
+@layer components {
+  /* Dark mode card component */
+  .dark-card {
+    @apply dark:bg-gray-800 dark:border-gray-700 rounded-xl shadow-lg;
+  }
+  
+  .dark-card-hover {
+    @apply dark:hover:bg-gray-750 transition-colors duration-200;
+  }
+  
+  /* Dark mode input component */
+  .dark-input {
+    @apply dark:bg-gray-800 dark:border-gray-600 dark:text-gray-100 rounded-lg px-4 py-2 dark:focus:border-green-500 dark:focus:ring-2 dark:focus:ring-green-500 dark:focus:ring-offset-2 dark:focus:ring-offset-gray-900;
+  }
+  
+  /* Dark mode button component */
+  .dark-button {
+    @apply dark:bg-green-600 text-white px-4 py-2 rounded-lg dark:hover:bg-green-700 transition-colors duration-200 dark:focus:outline-none dark:focus:ring-2 dark:focus:ring-green-500 dark:focus:ring-offset-2 dark:focus:ring-offset-gray-900;
+  }
+  
+  /* Dark mode text components */
+  .dark-text-primary {
+    @apply dark:text-gray-100;
+  }
+  
+  .dark-text-secondary {
+    @apply dark:text-gray-300;
+  }
+  
+  .dark-text-tertiary {
+    @apply dark:text-gray-400;
+  }
+  
+  /* Dark mode background components */
+  .dark-bg-primary {
+    @apply dark:bg-gray-900;
+  }
+  
+  .dark-bg-secondary {
+    @apply dark:bg-gray-800;
+  }
+  
+  .dark-bg-tertiary {
+    @apply dark:bg-gray-700;
+  }
+  
+  /* Dark mode modal */
+  .dark-modal {
+    @apply dark:bg-gray-800 dark:border-gray-700;
+  }
+  
+  .dark-modal-overlay {
+    @apply bg-black/80;
+  }
+  
+  /* Dark mode navigation */
+  .dark-nav {
+    @apply dark:bg-gray-800 dark:border-b dark:border-gray-700;
+  }
+  
+  /* Dark mode sidebar */
+  .dark-sidebar {
+    @apply dark:bg-gray-800 dark:border-r dark:border-gray-700;
+  }
+  
+  /* Dark mode table */
+  .dark-table {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-700;
+  }
+  
+  .dark-table-header {
+    @apply dark:bg-gray-700 dark:text-gray-100;
+  }
+  
+  .dark-table-row {
+    @apply dark:border-t dark:border-gray-700 dark:hover:bg-gray-700;
+  }
+  
+  /* Dark mode alert */
+  .dark-alert {
+    @apply dark:bg-gray-700 dark:border dark:border-gray-600 dark:text-gray-100;
+  }
+  
+  .dark-alert-success {
+    @apply dark:bg-green-900/20 dark:border-green-700 dark:text-green-300;
+  }
+  
+  .dark-alert-warning {
+    @apply dark:bg-yellow-900/20 dark:border-yellow-700 dark:text-yellow-300;
+  }
+  
+  .dark-alert-error {
+    @apply dark:bg-red-900/20 dark:border-red-700 dark:text-red-300;
+  }
+  
+  .dark-alert-info {
+    @apply dark:bg-blue-900/20 dark:border-blue-700 dark:text-blue-300;
+  }
+  
+  /* Dark mode badge */
+  .dark-badge {
+    @apply dark:bg-gray-700 dark:text-gray-300 dark:border dark:border-gray-600;
+  }
+  
+  /* Dark mode dropdown */
+  .dark-dropdown {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-700 dark:shadow-xl;
+  }
+  
+  .dark-dropdown-item {
+    @apply dark:text-gray-100 dark:hover:bg-gray-700;
+  }
+  
+  /* Dark mode tooltip */
+  .dark-tooltip {
+    @apply dark:bg-gray-700 dark:text-gray-100 dark:border dark:border-gray-600;
+  }
+  
+  /* Dark mode loading spinner */
+  .dark-spinner {
+    @apply dark:border-gray-600 dark:border-t-green-500;
+  }
+  
+  /* Dark mode pagination */
+  .dark-pagination {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-700;
+  }
+  
+  .dark-pagination-button {
+    @apply dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-gray-100;
+  }
+  
+  .dark-pagination-active {
+    @apply dark:bg-green-600 dark:text-white;
+  }
+  
+  /* Dark mode search */
+  .dark-search {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-600 dark:text-gray-100;
+  }
+  
+  /* Dark mode filter */
+  .dark-filter {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-700;
+  }
+  
+  .dark-filter-active {
+    @apply dark:bg-green-600 dark:text-white;
+  }
+  
+  /* Dark mode stats card */
+  .dark-stats-card {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-700;
+  }
+  
+  .dark-stats-value {
+    @apply dark:text-gray-100;
+  }
+  
+  .dark-stats-label {
+    @apply dark:text-gray-300;
+  }
+  
+  /* Dark mode chart */
+  .dark-chart {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-700;
+  }
+  
+  /* Dark mode progress bar */
+  .dark-progress {
+    @apply dark:bg-gray-700;
+  }
+  
+  .dark-progress-bar {
+    @apply dark:bg-green-600;
+  }
+  
+  /* Dark mode switch */
+  .dark-switch {
+    @apply dark:bg-gray-700 dark:border dark:border-gray-600;
+  }
+  
+  .dark-switch-active {
+    @apply dark:bg-green-600;
+  }
+  
+  /* Dark mode checkbox */
+  .dark-checkbox {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-600 dark:text-green-500;
+  }
+  
+  .dark-checkbox-checked {
+    @apply dark:bg-green-600 dark:border-green-600;
+  }
+  
+  /* Dark mode radio */
+  .dark-radio {
+    @apply dark:bg-gray-800 dark:border dark:border-gray-600 dark:text-green-500;
+  }
+  
+  .dark-radio-checked {
+    @apply dark:bg-green-600 dark:border-green-600;
+  }
+}

@@ -1,0 +1,101 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Disease Library – PITAYA</title>
+    <link rel="stylesheet" href="{% static 'css/pitaya-theme.css' %}">
+    <style>
+        .search-filters { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+        .search-box { flex: 1; min-width: 200px; padding: 12px 14px; border: 1px solid var(--pitaya-border); border-radius: var(--pitaya-radius-md); font-size: 0.95rem; font-family: inherit; }
+        .filter-select { padding: 12px 14px; border: 1px solid var(--pitaya-border); border-radius: var(--pitaya-radius-md); font-size: 0.95rem; background: var(--pitaya-surface); cursor: pointer; }
+        .disease-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--pitaya-space-md); }
+        .disease-card { border: 1px solid var(--pitaya-border-light); border-radius: var(--pitaya-radius-lg); background: var(--pitaya-surface); cursor: pointer; transition: all var(--pitaya-transition); text-decoration: none; color: inherit; overflow: hidden; display: flex; flex-direction: column; }
+        .disease-card:hover { background: var(--pitaya-green-50); border-color: var(--pitaya-green-500); transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.08); }
+        .disease-image { width: 100%; height: 150px; object-fit: cover; background: var(--pitaya-border-light); }
+        .disease-card-content { padding: var(--pitaya-space-md); }
+        .disease-name { font-weight: 700; margin: 0 0 4px; color: var(--pitaya-green-700); font-size: 1rem; }
+        .disease-part { font-size: 0.8rem; color: var(--pitaya-text-muted); margin: 4px 0; text-transform: capitalize; }
+        .disease-snippet { font-size: 0.8rem; color: var(--pitaya-text-muted); margin: 8px 0 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .no-results { text-align: center; padding: 40px 20px; color: var(--pitaya-text-muted); }
+        @media (max-width: 768px) { .disease-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<div class="pitaya-layout">
+    <div class="pitaya-sidebar-overlay" id="sidebarOverlay" onclick="document.getElementById('sidebar').classList.remove('is-open'); document.getElementById('sidebarOverlay').classList.remove('is-open');"></div>
+    <aside class="pitaya-sidebar" id="sidebar">
+        <div class="pitaya-sidebar-brand">
+            <img src="{% static 'ab.png' %}" alt="PITAYA logo">
+            <span>PITAYA</span>
+        </div>
+        <nav class="pitaya-nav">
+            <a href="/"><span class="nav-icon">📊</span> Dashboard</a>
+            <a href="/identify/"><span class="nav-icon">🔍</span> Disease Detection</a>
+            <a href="/library/"><span class="nav-icon">📚</span> Library</a>
+            <a href="/alerts/"><span class="nav-icon">🔔</span> Alerts</a>
+            <a href="/overview/"><span class="nav-icon">📈</span> Yield Prediction</a>
+            <a href="/report/"><span class="nav-icon">📄</span> Reports</a>
+            <a href="/profile/"><span class="nav-icon">👤</span> Profile</a>
+            <a href="#" class="nav-logout"><span class="nav-icon">🚪</span> Logout</a>
+        </nav>
+    </aside>
+
+    <div class="pitaya-main">
+        <header class="pitaya-topbar">
+            <button class="pitaya-menu-toggle" type="button" aria-label="Toggle menu" onclick="document.getElementById('sidebar').classList.toggle('is-open'); document.getElementById('sidebarOverlay').classList.toggle('is-open');">☰</button>
+            <div class="pitaya-topbar-title">Disease Library</div>
+        </header>
+
+        <div class="pitaya-content">
+            <div class="pitaya-shell">
+                <h1 class="pitaya-page-title">Dragon Fruit Diseases</h1>
+                <p class="pitaya-card-subtitle" style="margin-bottom: var(--pitaya-space-lg);">Learn about common dragon fruit diseases and their management.</p>
+
+                <div class="pitaya-card">
+                    <form method="get" action="{% url 'library' %}" class="search-filters">
+                        <input type="text" name="search" class="search-box" placeholder="Search by disease name, symptoms, or causes..." value="{{ search_query }}">
+                        <select name="plant_part" class="filter-select">
+                            <option value="">All Plant Parts</option>
+                            {% for value, label in plant_part_choices %}
+                            <option value="{{ value }}" {% if plant_part_filter == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="pitaya-btn pitaya-btn-primary">Search</button>
+                        {% if search_query or plant_part_filter %}
+                        <a href="{% url 'library' %}" class="pitaya-btn pitaya-btn-secondary">Clear</a>
+                        {% endif %}
+                    </form>
+                    
+                    {% if diseases_list %}
+                    <div class="disease-grid">
+                        {% for item in diseases_list %}
+                        <a href="{% url 'library_detail' item.disease.name %}" class="disease-card">
+                            {% if item.image_url %}
+                            <img src="{{ item.image_url }}" alt="{{ item.disease.name }}" class="disease-image" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                            <div class="disease-image" style="display: none; align-items: center; justify-content: center; height: 150px;">No Image</div>
+                            {% else %}
+                            <div class="disease-image" style="height: 150px; display: flex; align-items: center; justify-content: center;">No Image</div>
+                            {% endif %}
+                            <div class="disease-card-content">
+                                <div class="disease-name">{{ item.disease.name }}</div>
+                                <div class="disease-part">Affects: {{ item.disease.get_affected_plant_part_display }}</div>
+                                <div class="disease-snippet">{{ item.disease.symptoms|truncatewords:15 }}</div>
+                            </div>
+                        </a>
+                        {% endfor %}
+                    </div>
+                    {% else %}
+                    <div class="no-results">
+                        <p>No diseases found matching your search criteria.</p>
+                        <a href="{% url 'library' %}" style="color: var(--pitaya-green-700); text-decoration: underline;">View all diseases</a>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

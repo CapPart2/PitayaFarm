@@ -1,0 +1,72 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Profile – PITAYA: Plant Illness Tracking and Automated Yield Analysis</title>
+    <link rel="stylesheet" href="{% static 'css/pitaya-theme.css' %}">
+</head>
+<body>
+<div class="pitaya-layout">
+    <div class="pitaya-sidebar-overlay" id="sidebarOverlay" onclick="document.getElementById('sidebar').classList.remove('is-open'); document.getElementById('sidebarOverlay').classList.remove('is-open');"></div>
+    <aside class="pitaya-sidebar" id="sidebar">
+        <div class="pitaya-sidebar-brand">
+            <img src="{% static 'ab.png' %}" alt="PITAYA logo">
+            <span>PITAYA</span>
+        </div>
+        <nav class="pitaya-nav">
+            <a href="/"><span class="nav-icon">📊</span> Dashboard</a>
+            <a href="/identify/"><span class="nav-icon">🔍</span> Disease Detection</a>
+            <a href="/library/"><span class="nav-icon">📚</span> Library</a>
+            <a href="/alerts/"><span class="nav-icon">🔔</span> Alerts</a>
+            <a href="/overview/"><span class="nav-icon">📈</span> Yield Prediction</a>
+            <a href="/report/"><span class="nav-icon">📄</span> Reports</a>
+            <a href="/profile/"><span class="nav-icon">👤</span> Profile</a>
+            <a href="#" class="nav-logout"><span class="nav-icon">🚪</span> Logout</a>
+        </nav>
+    </aside>
+
+    <div class="pitaya-main">
+        <header class="pitaya-topbar">
+            <button class="pitaya-menu-toggle" type="button" aria-label="Toggle menu" onclick="document.getElementById('sidebar').classList.toggle('is-open'); document.getElementById('sidebarOverlay').classList.toggle('is-open');">☰</button>
+            <div class="pitaya-topbar-title">Profile</div>
+        </header>
+
+        <div class="pitaya-content">
+            <div class="pitaya-shell">
+                <h1 class="pitaya-page-title">Prediction History</h1>
+                <p class="pitaya-card-subtitle" style="margin-bottom: var(--pitaya-space-xl);">Your recent disease detection results.</p>
+
+                <div class="pitaya-card">
+                    {% if predictions %}
+                    <div class="pitaya-table-wrap">
+                        <table class="pitaya-table">
+                            <thead>
+                                <tr>
+                                    <th>Disease</th>
+                                    <th>Confidence</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for prediction in predictions %}
+                                <tr>
+                                    <td>🌿 {{ prediction.disease_name }}</td>
+                                    <td><strong>{{ prediction.confidence|floatformat:1 }}%</strong></td>
+                                    <td>{{ prediction.created_at|date:"M d, Y H:i" }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {% else %}
+                    <p style="margin: 0; color: var(--pitaya-text-muted);">No predictions yet. <a href="/identify/">Upload an image</a> to run disease detection.</p>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+</body>
+</html>

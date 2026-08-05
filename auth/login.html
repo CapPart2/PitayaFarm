@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login &mdash; PITAYAs</title>
+<style>
+    :root {
+        --green-700: #2f6a21;
+        --green-600: #3c7b2b;
+        --green-100: #e8f5e4;
+        --text-dark: #1d281c;
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+        background: #eef2ec;
+        color: var(--text-dark);
+    }
+    .auth-wrapper {
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+    }
+    .auth-header {
+        height: 56px;
+        background: var(--green-600);
+        color: #fff;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 16px;
+        font-weight: 700;
+        font-size: 17px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+    .auth-header img {
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background: #fff;
+    }
+    .auth-main {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+    }
+    .card {
+        background: #ffffff;
+        border-radius: 16px;
+        box-shadow: 0 18px 45px rgba(15, 23, 42, 0.16);
+        padding: 32px 26px 28px;
+        width: 100%;
+        max-width: 400px;
+    }
+    .card-header h2 {
+        margin: 0 0 4px;
+        font-size: 24px;
+        font-weight: 800;
+        color: var(--green-700);
+        text-align: center;
+    }
+    .card-header p {
+        margin: 0 0 18px;
+        font-size: 13px;
+        text-align: center;
+        color: #4b5b46;
+    }
+    input {
+        width: 100%;
+        padding: 11px 13px;
+        margin: 8px 0 0;
+        border-radius: 10px;
+        border: 1px solid #cbd5c5;
+        font-size: 14px;
+    }
+    input:focus {
+        outline: 2px solid var(--green-600);
+        border-color: transparent;
+    }
+    label {
+        display: block;
+        margin-top: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #374334;
+    }
+    .btn-primary {
+        width: 100%;
+        padding: 11px 16px;
+        margin-top: 20px;
+        border-radius: 999px;
+        border: none;
+        font-weight: 700;
+        cursor: pointer;
+        background: var(--green-600);
+        color: #ffffff;
+        box-shadow: 0 8px 18px rgba(26, 93, 46, 0.35);
+        transition: background .15s ease, transform .1s ease;
+    }
+    .btn-primary:hover {
+        background: #478636;
+        transform: translateY(-1px);
+    }
+    .message {
+        margin-top: 10px;
+        font-size: 13px;
+        color: #d03030;
+        text-align: center;
+    }
+    .message.success {
+        color: #15803d;
+    }
+    .foot-note {
+        margin-top: 14px;
+        text-align: center;
+        font-size: 13px;
+        color: #4b5b46;
+    }
+    a {
+        color: var(--green-700);
+        font-weight: 600;
+        text-decoration: none;
+    }
+    a:hover {
+        text-decoration: underline;
+    }
+    .password-field {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    .password-field input {
+        padding-right: 40px;
+    }
+    .toggle-password {
+        position: absolute;
+        right: 10px;
+        background: transparent;
+        border: none;
+        cursor: pointer;
+        font-size: 16px;
+        color: #4b5b46;
+    }
+</style>
+</head>
+<body>
+<div class="auth-wrapper">
+    <header class="auth-header">
+        <div style="width: 56px; height: 56px; border-radius: 50%; background: #2f6a21; display: flex; align-items: center; justify-content: center; font-weight: 800; color: #fff; font-size: 28px; margin: 0 auto 12px;">P</div>
+        <span>PITAYAs &mdash; Sign in</span>
+    </header>
+    <main class="auth-main">
+        <div class="card">
+            <div class="card-header">
+                <h2>Welcome back</h2>
+                <p>Sign in to access your PITAYAs dashboard.</p>
+            </div>
+
+            <form method="POST" action="#">
+                <label for="username">Username</label>
+                <input id="username" type="text" name="username" placeholder="Enter your username" required>
+
+                <label for="password">Password</label>
+                <div class="password-field">
+                    <input id="password" type="password" name="password" placeholder="Enter your password" required>
+                    <button type="button" class="toggle-password" data-target="password">&#128065;</button>
+                </div>
+
+                <button type="submit" class="btn-primary">Login</button>
+            </form>
+
+            <p class="foot-note">
+                Don’t have an account?
+                <a href="#">Create one</a>
+            </p>
+        </div>
+    </main>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.toggle-password').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var targetId = this.getAttribute('data-target');
+            var input = document.getElementById(targetId);
+            if (!input) return;
+            input.type = input.type === 'password' ? 'text' : 'password';
+        });
+    });
+});
+</script>
+</body>
+</html>

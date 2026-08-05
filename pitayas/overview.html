@@ -1,0 +1,151 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Yield Prediction – PITAYA: Plant Illness Tracking and Automated Yield Analysis</title>
+    <link rel="stylesheet" href="{% static 'css/pitaya-theme.css' %}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        .drone-preview {
+            width: 100%;
+            min-height: 240px;
+            background: linear-gradient(145deg, var(--pitaya-green-50) 0%, var(--pitaya-earth-100) 100%);
+            border: 2px dashed var(--pitaya-green-500);
+            border-radius: var(--pitaya-radius-lg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--pitaya-text-muted);
+            font-size: 0.95rem;
+        }
+        .drone-preview .placeholder-icon { font-size: 3rem; margin-bottom: 8px; opacity: 0.7; }
+        .yield-big-value { font-size: 2.5rem; font-weight: 800; color: var(--pitaya-green-700); line-height: 1.2; }
+    </style>
+</head>
+<body>
+<div class="pitaya-layout">
+    <div class="pitaya-sidebar-overlay" id="sidebarOverlay" onclick="document.getElementById('sidebar').classList.remove('is-open'); document.getElementById('sidebarOverlay').classList.remove('is-open');"></div>
+    <aside class="pitaya-sidebar" id="sidebar">
+        <div class="pitaya-sidebar-brand">
+            <img src="{% static 'ab.png' %}" alt="PITAYA logo">
+            <span>PITAYA</span>
+        </div>
+        <nav class="pitaya-nav">
+            <a href="/"><span class="nav-icon">📊</span> Dashboard</a>
+            <a href="/identify/"><span class="nav-icon">🔍</span> Disease Detection</a>
+            <a href="/library/"><span class="nav-icon">📚</span> Library</a>
+            <a href="/alerts/"><span class="nav-icon">🔔</span> Alerts</a>
+            <a href="/overview/"><span class="nav-icon">📈</span> Yield Prediction</a>
+            <a href="/report/"><span class="nav-icon">📄</span> Reports</a>
+            <a href="/profile/"><span class="nav-icon">👤</span> Profile</a>
+            <a href="#" class="nav-logout"><span class="nav-icon">🚪</span> Logout</a>
+        </nav>
+    </aside>
+
+    <div class="pitaya-main">
+        <header class="pitaya-topbar">
+            <button class="pitaya-menu-toggle" type="button" aria-label="Toggle menu" onclick="document.getElementById('sidebar').classList.toggle('is-open'); document.getElementById('sidebarOverlay').classList.toggle('is-open');">☰</button>
+            <div class="pitaya-topbar-title">Yield Prediction</div>
+        </header>
+
+        <div class="pitaya-content">
+            <div class="pitaya-shell">
+                <h1 class="pitaya-page-title">Yield Prediction &amp; Analysis</h1>
+                <p class="pitaya-card-subtitle" style="margin-bottom: var(--pitaya-space-xl);">Drone imagery and historical data for yield estimation.</p>
+
+                <div class="pitaya-charts-row">
+                    <div class="pitaya-card">
+                        <h2 class="pitaya-card-title">Drone Image Preview</h2>
+                        <p class="pitaya-card-subtitle">Field imagery for yield estimation (placeholder)</p>
+                        <div class="drone-preview">
+                            <div style="text-align: center;">
+                                <div class="placeholder-icon">🛸</div>
+                                <p style="margin: 0;">Drone / field image area</p>
+                                <p style="margin: 4px 0 0; font-size: 0.85rem;">Upload or link drone imagery for analysis</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="pitaya-card">
+                        <h2 class="pitaya-card-title">Predicted Yield</h2>
+                        <p class="pitaya-card-subtitle">Based on disease detection and plant health</p>
+                        <div class="yield-big-value">{{ predicted_yield }}%</div>
+                        <p style="margin: 8px 0 0; color: var(--pitaya-text-muted); font-size: 0.9rem;">Estimated yield index (relative to baseline)</p>
+                    </div>
+                </div>
+
+                <div class="pitaya-chart-wrap">
+                    <div class="chart-title">Yield Estimation Trend (Historical Comparison)</div>
+                    <canvas id="yieldChart" height="260"></canvas>
+                </div>
+
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Summary</h2>
+                    <p class="pitaya-card-subtitle">Health metrics affecting yield</p>
+                    <div class="pitaya-table-wrap">
+                        <table class="pitaya-table">
+                            <thead>
+                                <tr>
+                                    <th>Metric</th>
+                                    <th>Value</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr><td>Total scans</td><td>{{ total_scans }}</td></tr>
+                                <tr><td>Unique diseases detected</td><td>{{ unique_diseases }}</td></tr>
+                                <tr><td>Average confidence (disease)</td><td>{{ avg_confidence|floatformat:1 }}%</td></tr>
+                                <tr><td>Top disease</td><td>{{ top_disease }}</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+  const labels = {{ yield_labels_json }};
+  const data = {{ yield_historical_json }};
+  const ctx = document.getElementById('yieldChart');
+  if (ctx) {
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: 'Yield %',
+          data: data,
+          borderColor: '#3c7b2b',
+          backgroundColor: 'rgba(60, 123, 43, 0.12)',
+          fill: true,
+          tension: 0.3,
+          pointBackgroundColor: '#3c7b2b',
+          pointRadius: 5
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: {
+            min: 75,
+            max: 100,
+            grid: { color: 'rgba(0,0,0,0.06)' },
+            ticks: { color: '#4a5f44' }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: '#4a5f44' }
+          }
+        }
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>

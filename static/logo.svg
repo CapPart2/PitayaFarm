@@ -1,0 +1,28 @@
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dragon Fruit Circle Background -->
+  <circle cx="100" cy="100" r="95" fill="#4CAF50" stroke="#2F6A21" stroke-width="2"/>
+  
+  <!-- Leaves Pattern -->
+  <ellipse cx="70" cy="60" rx="25" ry="40" fill="#7CB342" transform="rotate(-30 70 60)"/>
+  <ellipse cx="130" cy="70" rx="25" ry="40" fill="#7CB342" transform="rotate(30 130 70)"/>
+  <ellipse cx="60" cy="120" rx="25" ry="40" fill="#9CCC65" transform="rotate(-50 60 120)"/>
+  <ellipse cx="140" cy="130" rx="25" ry="40" fill="#9CCC65" transform="rotate(50 140 130)"/>
+  
+  <!-- Dragon Fruit Main Body -->
+  <ellipse cx="100" cy="100" rx="35" ry="40" fill="#FF6B6B"/>
+  
+  <!-- Dragon Fruit Highlight -->
+  <ellipse cx="85" cy="85" rx="15" ry="18" fill="#FF9999" opacity="0.6"/>
+  
+  <!-- Dragon Fruit Spikes -->
+  <ellipse cx="75" cy="70" rx="8" ry="15" fill="#FF9999" transform="rotate(-45 75 70)"/>
+  <ellipse cx="125" cy="75" rx="8" ry="15" fill="#FF9999" transform="rotate(45 125 75)"/>
+  <ellipse cx="70" cy="115" rx="8" ry="15" fill="#FF9999" transform="rotate(-60 70 115)"/>
+  <ellipse cx="130" cy="120" rx="8" ry="15" fill="#FF9999" transform="rotate(60 130 120)"/>
+  <ellipse cx="100" cy="135" rx="8" ry="15" fill="#FF9999" transform="rotate(0 100 135)"/>
+  
+  <!-- Decorative Small Spots -->
+  <circle cx="50" cy="50" r="4" fill="#FF6B6B" opacity="0.7"/>
+  <circle cx="55" cy="65" r="3" fill="#FF6B6B" opacity="0.7"/>
+  <circle cx="145" cy="55" r="4" fill="#FF6B6B" opacity="0.7"/>
+</svg>

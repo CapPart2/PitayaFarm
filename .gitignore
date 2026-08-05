@@ -1,0 +1,71 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Flask
+instance/
+.webassets-cache
+
+# Environment variables
+.env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Models
+*.keras
+*.h5
+*.pkl
+!leaf_disease_model.keras
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Frontend (if in same repo)
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Generated mobile/Android build outputs
+frontend/android/**/build/
+frontend/android/app/src/main/assets/public/
+
+# Project data and generated reports not needed for hosting
+Mature Dragon Fruit/
+oversample/
+Yield_detection/runs/
+uploads/
+pitaya_project/db.sqlite3
+pitaya_database.db
+test_report.csv
+test_report.pdf
+test_direct_report.pdf
+Activity-AppDev.code-workspace
+flask_session/
+frontend/public/All Disease/
+frontend/public/oversample/

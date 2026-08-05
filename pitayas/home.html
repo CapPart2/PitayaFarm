@@ -1,0 +1,233 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dashboard – PITAYA: Plant Illness Tracking and Automated Yield Analysis</title>
+    <link rel="stylesheet" href="{% static 'css/pitaya-theme.css' %}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="pitaya-layout">
+    <div class="pitaya-sidebar-overlay" id="sidebarOverlay" onclick="document.getElementById('sidebar').classList.remove('is-open'); document.getElementById('sidebarOverlay').classList.remove('is-open');"></div>
+    <aside class="pitaya-sidebar" id="sidebar">
+        <div class="pitaya-sidebar-brand">
+            <img src="{% static 'ab.png' %}" alt="PITAYA logo">
+            <span>PITAYA</span>
+        </div>
+        <nav class="pitaya-nav">
+            <a href="/"><span class="nav-icon">📊</span> Dashboard</a>
+            <a href="/identify/"><span class="nav-icon">🔍</span> Disease Detection</a>
+            <a href="/library/"><span class="nav-icon">📚</span> Library</a>
+            <a href="/alerts/"><span class="nav-icon">🔔</span> Alerts</a>
+            <a href="/overview/"><span class="nav-icon">📈</span> Yield Prediction</a>
+            <a href="/report/"><span class="nav-icon">📄</span> Reports</a>
+            <a href="/profile/"><span class="nav-icon">👤</span> Profile</a>
+            <a href="#" class="nav-logout"><span class="nav-icon">🚪</span> Logout</a>
+        </nav>
+    </aside>
+
+    <div class="pitaya-main">
+        <header class="pitaya-topbar">
+            <button class="pitaya-menu-toggle" type="button" aria-label="Toggle menu" onclick="document.getElementById('sidebar').classList.toggle('is-open'); document.getElementById('sidebarOverlay').classList.toggle('is-open');">☰</button>
+            <div class="pitaya-topbar-title">Dashboard</div>
+        </header>
+
+        <div class="pitaya-content">
+            <div class="pitaya-shell">
+                <section class="pitaya-hero">
+                    <div class="hero-inner">
+                        <img src="{% static 'ab.png' %}" alt="PITAYA" class="hero-logo">
+                        <div>
+                            <h1 class="pitaya-page-title hero-title">PITAYA</h1>
+                            <p class="hero-tagline">Plant Illness Tracking and Automated Yield Analysis System for Dragon Fruit</p>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Summary cards -->
+                <h2 class="pitaya-section-title">Overview</h2>
+                <div class="pitaya-stat-grid">
+                    <div class="pitaya-stat-card stat-total">
+                        <div class="stat-icon">🌱</div>
+                        <div class="stat-value">{{ total_plants }}</div>
+                        <div class="stat-label">Total Plants</div>
+                    </div>
+                    <div class="pitaya-stat-card stat-diseased">
+                        <div class="stat-icon">⚠️</div>
+                        <div class="stat-value">{{ diseased_plants }}</div>
+                        <div class="stat-label">Diseased Plants</div>
+                    </div>
+                    <div class="pitaya-stat-card stat-healthy">
+                        <div class="stat-icon">✅</div>
+                        <div class="stat-value">{{ healthy_plants }}</div>
+                        <div class="stat-label">Healthy Plants</div>
+                    </div>
+                    <div class="pitaya-stat-card stat-yield">
+                        <div class="stat-icon">📦</div>
+                        <div class="stat-value">{{ predicted_yield }}%</div>
+                        <div class="stat-label">Predicted Yield</div>
+                    </div>
+                </div>
+
+                <div class="pitaya-charts-row">
+                    <!-- Yield prediction trend (line chart) -->
+                    <div class="pitaya-chart-wrap">
+                        <div class="chart-title">Yield Prediction Trend</div>
+                        <canvas id="yieldTrendChart" height="220"></canvas>
+                    </div>
+                    <!-- Disease distribution (pie or bar) -->
+                    <div class="pitaya-chart-wrap">
+                        <div class="chart-title">Disease Distribution</div>
+                        <canvas id="diseaseDistChart" height="220"></canvas>
+                    </div>
+                </div>
+
+                <!-- Recent disease alerts -->
+                <div class="pitaya-card">
+                    <h2 class="pitaya-card-title">Recent Disease Alerts</h2>
+                    <p class="pitaya-card-subtitle">Latest detections and notifications</p>
+                    {% if recent_alerts %}
+                        <div class="pitaya-alerts-list">
+                            {% for p in recent_alerts %}
+                            <div class="pitaya-alert-item">
+                                <div class="alert-icon" style="background: #fee2e2; color: var(--pitaya-danger);">🌿</div>
+                                <div class="alert-body">
+                                    <div class="alert-title">{{ p.disease_name }}</div>
+                                    <div class="alert-meta">Confidence: <strong>{{ p.confidence|floatformat:1 }}%</strong> · {{ p.created_at|date:"M d, Y H:i" }}</div>
+                                </div>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <p style="margin-top: 12px;"><a href="/alerts/" class="pitaya-btn pitaya-btn-ghost">View all alerts →</a></p>
+                    {% else %}
+                        <p style="color: var(--pitaya-text-muted); margin: 0;">No recent alerts. <a href="/identify/">Upload an image</a> to run disease detection.</p>
+                    {% endif %}
+                </div>
+
+                <!-- Quick actions -->
+                <h2 class="pitaya-section-title" style="margin-top: var(--pitaya-space-xl);">Quick Actions</h2>
+                <div class="pitaya-action-grid">
+                    <a href="/identify/" class="pitaya-action-tile">
+                        <span class="tile-icon">📷</span>
+                        <span class="tile-label">Capture / Upload</span>
+                    </a>
+                    <a href="/identify/" class="pitaya-action-tile">
+                        <span class="tile-icon">🖼️</span>
+                        <span class="tile-label">Select from Gallery</span>
+                    </a>
+                    <a href="/overview/" class="pitaya-action-tile">
+                        <span class="tile-icon">📈</span>
+                        <span class="tile-label">Yield Prediction</span>
+                    </a>
+                    <a href="/report/" class="pitaya-action-tile">
+                        <span class="tile-icon">📄</span>
+                        <span class="tile-label">Download Report</span>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+(function() {
+  const yieldTrendData = {{ yield_trend_json }};
+  const diseaseLabels = {{ disease_labels_json }};
+  const diseaseValues = {{ disease_values_json }};
+
+  // Yield trend line chart
+  const yieldCtx = document.getElementById('yieldTrendChart');
+  if (yieldCtx) {
+    new Chart(yieldCtx, {
+      type: 'line',
+      data: {
+        labels: ['Period 1', 'Period 2', 'Period 3', 'Period 4', 'Period 5', 'Current'],
+        datasets: [{
+          label: 'Predicted Yield %',
+          data: yieldTrendData,
+          borderColor: '#3c7b2b',
+          backgroundColor: 'rgba(60, 123, 43, 0.1)',
+          fill: true,
+          tension: 0.3,
+          pointBackgroundColor: '#3c7b2b',
+          pointRadius: 4
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false }
+        },
+        scales: {
+          y: {
+            min: 70,
+            max: 100,
+            grid: { color: 'rgba(0,0,0,0.06)' },
+            ticks: { color: '#4a5f44' }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: '#4a5f44' }
+          }
+        }
+      }
+    });
+  }
+
+  // Disease distribution (bar if multiple, pie if few)
+  const distCtx = document.getElementById('diseaseDistChart');
+  if (distCtx) {
+    const colors = ['#2f6a21', '#4d9c3d', '#6bb854', '#8b7355', '#b8860b', '#c0392b', '#2980b9', '#6c5ce7', '#00b894'];
+    if (diseaseLabels.length === 0) {
+      new Chart(distCtx, {
+        type: 'doughnut',
+        data: {
+          labels: ['No data yet'],
+          datasets: [{ data: [1], backgroundColor: ['#e8efe6'] }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: 'bottom' } }
+        }
+      });
+    } else {
+      new Chart(distCtx, {
+        type: 'bar',
+        data: {
+          labels: diseaseLabels,
+          datasets: [{
+            label: 'Detections',
+            data: diseaseValues,
+            backgroundColor: diseaseLabels.map((_, i) => colors[i % colors.length]),
+            borderRadius: 6
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            legend: { display: false }
+          },
+          scales: {
+            x: {
+              grid: { color: 'rgba(0,0,0,0.06)' },
+              ticks: { color: '#4a5f44' }
+            },
+            y: {
+              grid: { display: false },
+              ticks: { color: '#4a5f44', font: { size: 11 } }
+            }
+          }
+        }
+      });
+    }
+  }
+})();
+</script>
+</body>
+</html>
