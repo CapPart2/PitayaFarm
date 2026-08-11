@@ -13,7 +13,7 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Manila
 
 RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx gettext-base tzdata libglib2.0-0 libgl1 libgomp1 \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx gettext-base tzdata ffmpeg libglib2.0-0 libgl1 libgomp1 \
     && ln -snf /usr/share/zoneinfo/Asia/Manila /etc/localtime \
     && echo Asia/Manila > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*

@@ -656,6 +656,8 @@ def convert_to_browser_compatible_mp4(input_path: str, output_path: str) -> bool
             "fast",
             "-crf",
             "23",
+            "-pix_fmt",
+            "yuv420p",  # Broadest mobile and browser H.264 compatibility
             "-c:a",
             "aac",  # AAC audio codec
             "-movflags",
