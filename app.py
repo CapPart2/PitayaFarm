@@ -75,6 +75,7 @@ class_names = [
 # redeploy.  Local development continues to use the existing uploads folder.
 UPLOAD_FOLDER = os.path.join(os.environ.get("PITAYA_DATA_DIR", "."), "uploads")
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
+MAX_UPLOAD_MIGRATION_CHUNK_BYTES = 25 * 1024 * 1024
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
@@ -1592,6 +1593,87 @@ def restore_database_backup():
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+def _migration_destination(relative_path):
+    """Return a safe path within the persistent uploads volume."""
+    normalized = str(relative_path or "").replace("\\", "/").lstrip("/")
+    parts = [part for part in normalized.split("/") if part and part not in (".", "..")]
+    if not parts or len(parts) != len(normalized.split("/")):
+        raise ValueError("Invalid upload path")
+
+    upload_root = os.path.abspath(UPLOAD_FOLDER)
+    destination = os.path.abspath(os.path.join(upload_root, *parts))
+    if os.path.commonpath([upload_root, destination]) != upload_root:
+        raise ValueError("Upload path is outside the data volume")
+    return destination
+
+
+@app.route("/api/admin/uploads/migration-status", methods=["POST"])
+@admin_required
+def get_upload_migration_status():
+    """Report the resumable offset for one protected upload migration file."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        destination = _migration_destination(payload.get("path"))
+        expected_size = int(payload.get("size", -1))
+        if expected_size < 0:
+            raise ValueError("A valid file size is required")
+
+        if os.path.isfile(destination) and os.path.getsize(destination) == expected_size:
+            return jsonify({"success": True, "complete": True, "offset": expected_size})
+
+        temporary_path = f"{destination}.migrating"
+        offset = os.path.getsize(temporary_path) if os.path.isfile(temporary_path) else 0
+        return jsonify({"success": True, "complete": False, "offset": offset})
+    except (TypeError, ValueError) as error:
+        return jsonify({"success": False, "error": str(error)}), 400
+
+
+@app.route("/api/admin/uploads/migrate-chunk", methods=["POST"])
+@admin_required
+def migrate_upload_chunk():
+    """Write one ordered upload chunk into the persistent Railway volume."""
+    uploaded_chunk = request.files.get("chunk")
+    try:
+        destination = _migration_destination(request.form.get("path"))
+        offset = int(request.form.get("offset", -1))
+        total_size = int(request.form.get("total_size", -1))
+        if not uploaded_chunk or offset < 0 or total_size < 0:
+            raise ValueError("Path, offset, total size, and chunk are required")
+
+        chunk_data = uploaded_chunk.read(MAX_UPLOAD_MIGRATION_CHUNK_BYTES + 1)
+        if not chunk_data or len(chunk_data) > MAX_UPLOAD_MIGRATION_CHUNK_BYTES:
+            raise ValueError("Invalid migration chunk size")
+        if offset + len(chunk_data) > total_size:
+            raise ValueError("Chunk exceeds the declared file size")
+
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
+        if os.path.isfile(destination) and os.path.getsize(destination) == total_size:
+            return jsonify({"success": True, "complete": True, "offset": total_size})
+
+        temporary_path = f"{destination}.migrating"
+        current_size = os.path.getsize(temporary_path) if os.path.isfile(temporary_path) else 0
+        if offset > current_size:
+            return jsonify({"success": False, "error": "Chunk is out of order", "offset": current_size}), 409
+        if offset < current_size and offset + len(chunk_data) < current_size:
+            return jsonify({"success": True, "complete": False, "offset": current_size})
+
+        mode = "r+b" if os.path.exists(temporary_path) else "wb"
+        with open(temporary_path, mode) as target:
+            target.seek(offset)
+            target.write(chunk_data)
+
+        received_size = os.path.getsize(temporary_path)
+        if received_size == total_size:
+            os.replace(temporary_path, destination)
+            return jsonify({"success": True, "complete": True, "offset": total_size})
+        return jsonify({"success": True, "complete": False, "offset": received_size})
+    except (TypeError, ValueError) as error:
+        return jsonify({"success": False, "error": str(error)}), 400
+    except Exception as error:
+        logger.exception("Upload migration chunk failed")
+        return jsonify({"success": False, "error": str(error)}), 500
 
 
 # ===== ADMIN: USER MANAGEMENT ENDPOINTS =====
