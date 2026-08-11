@@ -50,6 +50,13 @@ const kpiCards = [
 
 const severityColors = { high: 'bg-red-100 text-red-800', medium: 'bg-amber-100 text-amber-800', low: 'bg-gray-100 text-gray-700' }
 
+const professionalMetrics = [
+  { key: 'totalDetections', label: 'Disease detections', detail: 'All recorded plant-health scans', action: 'View reports', target: '/app/reports', suffix: '', tone: 'border-pitaya-primary' },
+  { key: 'highSeverityCases', label: 'High-priority cases', detail: 'Cases requiring immediate review', action: 'Review cases', target: '/app/reports', suffix: '', tone: 'border-red-500' },
+  { key: 'unreadAlerts', label: 'Alerts to review', detail: 'Unread farm-health notifications', action: 'Open alerts', target: '/app/alerts', suffix: '', tone: 'border-amber-500' },
+  { key: 'avgConfidence', label: 'Average scan confidence', detail: 'Confidence across disease detections', action: 'Run new scan', target: '/app/identify', suffix: '%', tone: 'border-sky-500' },
+]
+
 const CHART_COLORS = [
   '#FF6384', // Red - Anthracnose
   '#36A2EB', // Blue - Black Spot  
@@ -75,6 +82,7 @@ export default function Dashboard() {
   const [dashboardAlerts, setDashboardAlerts] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
+  const [lastUpdated, setLastUpdated] = useState(null)
 
   const loadDashboardData = async () => {
     try {
@@ -98,6 +106,7 @@ export default function Dashboard() {
         severityDistribution: severityDist || null
       })
       setDashboardAlerts(alertsData || [])
+      setLastUpdated(new Date())
     } catch (error) {
       console.error('Failed to load dashboard data:', error)
       // Set fallback data to prevent crashes
@@ -189,6 +198,7 @@ export default function Dashboard() {
   }
 
   const yieldChartData = aggregateYield(yieldEstimation, yieldFilter)
+  const needsAttention = (data?.highSeverityCases || 0) > 0 || (data?.unreadAlerts || 0) > 0
 
   return (
     <motion.div
@@ -197,17 +207,26 @@ export default function Dashboard() {
       animate="show"
       className="max-w-7xl mx-auto space-y-8"
     >
-      <div>
-        <h1 className="font-display font-bold text-2xl text-gray-900 dark:text-gray-100">Dashboard</h1>
-        <p className="text-gray-600 dark:text-gray-300 mt-1">Overview of plant health and yield prediction</p>
+      <div className="flex flex-col gap-5 border-b border-gray-200 pb-6 dark:border-gray-700 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-pitaya-primary dark:text-pitaya-mint">Farm intelligence</p>
+          <h1 className="mt-2 font-display text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">Farm health overview</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-600 dark:text-gray-300">Monitor disease activity, prioritise urgent cases, and track yield records from one workspace.</p>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <p className="text-xs text-gray-500 dark:text-gray-400">{lastUpdated ? `Last updated ${lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : 'Loading latest data'}</p>
+          <button onClick={refreshData} disabled={refreshing} className="min-h-[44px] rounded-lg bg-pitaya-primary px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-pitaya-leaf disabled:cursor-not-allowed disabled:opacity-50">
+            {refreshing ? 'Refreshing data…' : 'Refresh data'}
+          </button>
+        </div>
       </div>
 
       {/* KPI Cards */}
-      <motion.div variants={item} className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
+      <motion.div variants={item} className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {loading ? (
           // Loading skeleton
-          kpiCards.map((card, index) => (
-            <div key={index} className="bg-white dark:bg-gray-800 rounded-2xl p-5 border border-gray-100 dark:border-gray-700 shadow-card">
+          professionalMetrics.map((card, index) => (
+            <div key={index} className="rounded-xl border border-gray-200 border-t-4 border-t-gray-300 bg-white p-5 shadow-sm dark:border-gray-700 dark:border-t-gray-600 dark:bg-gray-800">
               <div className="animate-pulse">
                 <div className="h-4 bg-gray-200 dark:bg-gray-600 rounded w-3/4 mb-3"></div>
                 <div className="h-8 bg-gray-200 dark:bg-gray-600 rounded w-1/2"></div>
@@ -215,36 +234,26 @@ export default function Dashboard() {
             </div>
           ))
         ) : (
-          kpiCards.map((card) => (
+          professionalMetrics.map((card) => (
             <motion.div
               key={card.key}
               variants={item}
-              whileHover={{ y: -4, boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.08)' }}
+              whileHover={{ y: -2, boxShadow: '0 10px 25px -12px rgb(0 0 0 / 0.22)' }}
               whileTap={{ scale: 0.99 }}
               transition={{ duration: 0.2 }}
-              onClick={() => {
-                if (card.key === 'unreadAlerts') {
-                  navigate('/app/alerts')
-                } else if (card.key === 'highSeverityCases') {
-                  navigate('/app/reports')
-                } else if (card.key === 'totalYieldRecords' || card.key === 'totalFruits') {
-                  navigate('/app/yield-report')
-                }
-              }}
-              className={`bg-white dark:bg-gray-800 rounded-2xl p-4 sm:p-5 border border-gray-100 dark:border-gray-700 shadow-card transition-shadow touch-manipulation ${
-                ['unreadAlerts', 'highSeverityCases', 'totalYieldRecords', 'totalFruits'].includes(card.key)
-                  ? 'cursor-pointer hover:border-blue-300 dark:hover:border-blue-600' 
-                  : ''
-              }`}
+              onClick={() => navigate(card.target)}
+              className={`cursor-pointer rounded-xl border border-gray-200 border-t-4 bg-white p-5 shadow-sm transition-shadow touch-manipulation dark:border-gray-700 dark:bg-gray-800 ${card.tone}`}
             >
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
                 <div className="min-w-0">
-                  <p className="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 leading-tight">{card.label}</p>
-                  <p className="mt-1 text-xl sm:text-2xl font-bold text-gray-900 dark:text-gray-100 truncate">
+                  <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">{card.label}</p>
+                  <p className="mt-4 text-3xl font-bold tracking-tight text-gray-900 dark:text-gray-100">
                     {(data?.[card.key] ?? 0).toLocaleString()}{card.suffix}
                   </p>
+                  <p className="mt-2 text-xs leading-5 text-gray-500 dark:text-gray-400">{card.detail}</p>
+                  <p className="mt-4 text-xs font-semibold text-pitaya-primary dark:text-pitaya-mint">{card.action} <span aria-hidden>→</span></p>
                 </div>
-                <div className="flex items-center gap-1">
+                <div className="hidden">
                   <span className="text-2xl sm:text-3xl">{card.icon}</span>
                   {(card.key === 'unreadAlerts' || card.key === 'highSeverityCases') && (
                     <span className="text-xs text-gray-400 dark:text-gray-500">→</span>
@@ -256,8 +265,23 @@ export default function Dashboard() {
         )}
       </motion.div>
 
+      <motion.section variants={item} className={`grid overflow-hidden rounded-xl border shadow-sm lg:grid-cols-[1.4fr_1fr] ${needsAttention ? 'border-amber-200 dark:border-amber-900' : 'border-pitaya-leaf/30 dark:border-gray-700'}`}>
+        <div className="bg-white p-5 dark:bg-gray-800 sm:p-6">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">Current priority</p>
+          <h2 className="mt-2 text-xl font-bold text-gray-900 dark:text-gray-100">{needsAttention ? 'Farm health needs review' : 'No urgent farm-health issues'}</h2>
+          <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-300">{needsAttention ? `${data?.highSeverityCases || 0} high-priority case(s) and ${data?.unreadAlerts || 0} unread alert(s) need your attention.` : 'There are no high-priority cases or unread alerts at this time.'}</p>
+        </div>
+        <div className="border-t border-gray-200 bg-gray-50 p-5 dark:border-gray-700 dark:bg-gray-800/70 sm:p-6 lg:border-l lg:border-t-0">
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-gray-500 dark:text-gray-400">Yield tracking</p>
+          <div className="mt-3 flex items-end gap-8">
+            <div><p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{(data?.totalYieldRecords ?? 0).toLocaleString()}</p><p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Yield records</p></div>
+            <div><p className="text-2xl font-bold text-gray-900 dark:text-gray-100">{(data?.totalFruits ?? 0).toLocaleString()}</p><p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Fruits logged</p></div>
+          </div>
+        </div>
+      </motion.section>
+
       {/* Refresh Button */}
-      <motion.div variants={item} className="flex justify-end">
+      <motion.div variants={item} className="hidden">
         <button
           onClick={refreshData}
           disabled={refreshing}
@@ -280,7 +304,7 @@ export default function Dashboard() {
       <motion.div variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700 shadow-card">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
-            <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100">Yield Total Fruit</h2>
+            <div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">Yield</p><h2 className="mt-1 font-display font-semibold text-lg text-gray-900 dark:text-gray-100">Fruit detection trend</h2></div>
             <div className="inline-flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
               <span>View</span>
               <select
@@ -357,7 +381,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700 shadow-card">
-          <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Disease Distribution</h2>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">Plant health</p><h2 className="mt-1 font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Disease distribution</h2>
           <ResponsiveContainer width="100%" height={350}>
             <PieChart>
               <Pie
@@ -436,7 +460,7 @@ export default function Dashboard() {
       {/* Charts row 2: Daily Detections + Severity Distribution */}
       <motion.div variants={item} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700 shadow-card">
-          <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Daily Disease Detections</h2>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">Activity</p><h2 className="mt-1 font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Daily disease detections</h2>
           <ResponsiveContainer width="100%" height={300}>
             <BarChart 
               data={chartData.dailyDetections?.labels?.map((label, index) => ({
@@ -477,7 +501,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700 shadow-card">
-          <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Severity Distribution</h2>
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">Risk profile</p><h2 className="mt-1 font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Severity distribution</h2>
           <ResponsiveContainer width="100%" height={300}>
             <PieChart>
               <Pie
@@ -511,15 +535,15 @@ export default function Dashboard() {
       </motion.div>
 
       {/* Alerts Section */}
-      <motion.div variants={item} className="bg-white dark:bg-gray-800 rounded-2xl p-6 border border-gray-100 dark:border-gray-700 shadow-card">
-        <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100 mb-4">Recent Alerts</h2>
+      <motion.div variants={item} className="bg-white dark:bg-gray-800 rounded-2xl p-5 sm:p-6 border border-gray-100 dark:border-gray-700 shadow-card">
+        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.14em] text-gray-500 dark:text-gray-400">Notifications</p><h2 className="mt-1 font-display font-semibold text-lg text-gray-900 dark:text-gray-100">Recent alerts</h2></div><button type="button" onClick={() => navigate('/app/alerts')} className="text-left text-sm font-semibold text-pitaya-primary hover:underline dark:text-pitaya-mint">View all alerts</button></div>
         {dashboardAlerts.length === 0 ? (
           <p className="text-gray-500 dark:text-gray-400 text-center py-8">No new alerts</p>
         ) : (
           <div className="space-y-3">
             {dashboardAlerts.slice(0, 5).map((alert) => (
-              <div key={alert.AlertID || alert.id} className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-700 rounded-lg">
-                <div className="flex items-center justify-between">
+              <div key={alert.AlertID || alert.id} className="flex flex-col gap-2 rounded-lg bg-gray-50 p-3 dark:bg-gray-700 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
                   <div>
                     <span className={`px-2 py-1 rounded-full text-xs font-medium ${
                       (alert.Severity || alert.severity) === 'high' ? 'bg-red-100 dark:bg-red-900/20 text-red-800 dark:text-red-300' :
@@ -532,10 +556,8 @@ export default function Dashboard() {
                       {alert.DiseaseType || alert.disease_name || 'Unknown Disease'}
                     </span>
                   </div>
-                  <span className="text-xs text-gray-500 dark:text-gray-400">
-                    {alert.DateTime ? new Date(alert.DateTime).toLocaleString() : 'Unknown time'}
-                  </span>
                 </div>
+                <span className="shrink-0 text-xs text-gray-500 dark:text-gray-400">{alert.DateTime ? new Date(alert.DateTime).toLocaleString() : 'Unknown time'}</span>
               </div>
             ))}
           </div>
