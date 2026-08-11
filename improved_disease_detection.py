@@ -295,7 +295,7 @@ class ImprovedDiseaseDetection:
             mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
             mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
 
-            component_count, _, stats, centroids = cv2.connectedComponentsWithStats(
+            component_count, labels, stats, centroids = cv2.connectedComponentsWithStats(
                 mask, connectivity=8
             )
             image_area = float(width * height)
