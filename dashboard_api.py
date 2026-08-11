@@ -139,6 +139,46 @@ def mature_core_ratio(frame_bgr, x: int, y: int, width: int, height: int) -> flo
     return cv2.countNonZero(cv2.bitwise_or(red_low, red_high)) / float(width * height)
 
 
+def validate_dragonfruit_maturity_scene(frame_bgr) -> dict:
+    """Accept maturity detection only when dragon-fruit plant tissue is visible.
+
+    The maturity model contains a positive mature-fruit class, not an
+    "unrelated image" class. This image-level gate therefore prevents a face,
+    fabric, vehicle, or another crop from being counted as fruit. It is
+    intentionally conservative: a false negative is safer than changing the
+    yield record with a false fruit.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return {"valid": False, "reason": "unreadable_image"}
+
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    green_mask = cv2.inRange(
+        hsv, np.array([25, 65, 45]), np.array([95, 255, 255])
+    )
+    green_mask = cv2.morphologyEx(
+        green_mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+    )
+    label_count, _, stats, _ = cv2.connectedComponentsWithStats(
+        green_mask, connectivity=8
+    )
+    largest_component = (
+        int(stats[1:, cv2.CC_STAT_AREA].max()) if label_count > 1 else 0
+    )
+    frame_area = float(frame_bgr.shape[0] * frame_bgr.shape[1])
+    green_ratio = cv2.countNonZero(green_mask) / frame_area
+    largest_component_ratio = largest_component / frame_area
+    valid = green_ratio >= 0.035 and largest_component_ratio >= 0.007
+
+    return {
+        "valid": bool(valid),
+        "reason": None if valid else "dragonfruit_plant_context_not_found",
+        "green_ratio": float(green_ratio),
+        "largest_green_component_ratio": float(largest_component_ratio),
+    }
+
+
 def is_hsv_fruit_candidate(
     contour, pink_mask, frame_shape, image_mode: bool = False, frame_bgr=None
 ) -> bool:
@@ -2850,16 +2890,34 @@ def yield_image_detect():
         # optional confidence threshold
         conf = float(request.form.get("conf", 0.25))
         method = (request.form.get("method") or "yolo").lower()
+        frame_bgr = cv2.imread(img_path)
+        if frame_bgr is None:
+            return jsonify({"success": False, "error": "Failed to read saved image"}), 400
+
+        scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
+        if not scene_validation["valid"]:
+            success, encoded_img = cv2.imencode(".jpg", frame_bgr)
+            if not success:
+                return jsonify({"success": False, "error": "Failed to encode image"}), 500
+            encoded_b64 = base64.b64encode(encoded_img.tobytes()).decode("ascii")
+            return jsonify(
+                {
+                    "success": True,
+                    "data": {
+                        "detections": [],
+                        "annotated_image": f"data:image/jpeg;base64,{encoded_b64}",
+                        "source_path": img_path,
+                        "message": "No mature detection found. Please capture mature dragon fruit with its stem visible.",
+                        "reason": scene_validation["reason"],
+                        "scene_validation": scene_validation,
+                    },
+                }
+            )
 
         # If caller requests classic color-based detection, run it and return
         if method == "color":
             # Use classical color-based HSV detection (user-provided algorithm)
-            img_bgr = cv2.imread(img_path)
-            if img_bgr is None:
-                return (
-                    jsonify({"success": False, "error": "Failed to read saved image"}),
-                    500,
-                )
+            img_bgr = frame_bgr
 
             # Use exactly the same still-photo HSV path as hybrid mode. Keeping two
             # copies of the colour logic caused the colour-only endpoint to miss a
@@ -2906,12 +2964,17 @@ def yield_image_detect():
                         "detections": detections,
                         "annotated_image": f"data:image/jpeg;base64,{encoded_b64}",
                         "source_path": img_path,
+                        "message": (
+                            None
+                            if detections
+                            else "No mature detection found. No mature dragon fruit was identified."
+                        ),
+                        "scene_validation": scene_validation,
                     },
                 }
             )
 
         detections = []
-        frame_bgr = cv2.imread(img_path)
         model = None
         results = []
         model_error = None
@@ -3021,6 +3084,12 @@ def yield_image_detect():
                 "detections": detections,
                 "annotated_image": f"data:image/jpeg;base64,{encoded_img}",
                 "source_path": img_path,
+                "message": (
+                    None
+                    if detections
+                    else "No mature detection found. No mature dragon fruit was identified."
+                ),
+                "scene_validation": scene_validation,
             },
         }
 

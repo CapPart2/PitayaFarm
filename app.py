@@ -153,8 +153,12 @@ def validate_dragonfruit_stem_image(image_path):
             or (paper_ratio >= 0.45 and plant_ratio <= 0.05 and edge_energy <= 12)
         )
 
+        # Brown/organic pixels by themselves also occur in skin, furniture,
+        # soil, and patterned fabric. Require visible green cactus tissue
+        # before a disease-only classifier is allowed to choose a label.
         valid = (
-            (plant_ratio >= 0.07)
+            (plant_ratio >= 0.12)
+            and (green_ratio >= 0.08)
             and (paper_ratio <= 0.78)
             and (gray_std >= 16 or edge_energy >= 12)
             and (not document_like)

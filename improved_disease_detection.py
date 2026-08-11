@@ -37,22 +37,24 @@ class ImprovedDiseaseDetection:
         ]
         self.img_size = (224, 224)
 
-        # Lowered confidence thresholds to allow multi-disease detection
+        # This model was trained only with disease classes; it has no
+        # ``healthy`` label.  Treat a label as a disease only when the signal
+        # is very strong.  This deliberately favours "no detection" over a
+        # false disease result for a visually healthy stem.
         self.confidence_thresholds = {
-            "Anthracnose": 0.30,
-            "Black Spot": 0.28,
-            "Brown Spot": 0.30,
-            "Root Rot": 0.35,
-            "Soft Rot": 0.28,
-            "Stem Rot": 0.35,
-            "Stem_Canker": 0.45,
-            "Twig Blight": 0.28,
-            "White Spot": 0.25,
+            "Anthracnose": 0.85,
+            "Black Spot": 0.90,
+            "Brown Spot": 0.88,
+            "Root Rot": 0.88,
+            "Soft Rot": 0.88,
+            "Stem Rot": 0.90,
+            "Stem_Canker": 0.90,
+            "Twig Blight": 0.85,
+            "White Spot": 0.88,
         }
 
         # Minimum confidence for any disease detection.
-        # Keep this higher so weak predictions are treated as uncertain.
-        self.min_confidence = 0.25
+        self.min_confidence = 0.85
 
     def load_model(self):
         """Load the best available model"""
@@ -230,12 +232,14 @@ class ImprovedDiseaseDetection:
                 paper_like_ratio >= 0.72 and organic_ratio <= 0.20
             ) or (mean_saturation < 30 and paper_like_ratio >= 0.58)
 
-            # Accept only if there is enough organic, non-paper content.
+            # A warm/brown textured area is not sufficient evidence of a
+            # dragon-fruit stem. Require meaningful green cactus tissue so
+            # people, soil, fabric, and other objects are rejected.
             is_target = (
                 not document_like
                 and organic_ratio >= 0.18
-                and plant_ratio >= 0.06
-                and (green_ratio >= 0.03 or brown_ratio >= 0.03)
+                and plant_ratio >= 0.12
+                and green_ratio >= 0.08
                 and paper_like_ratio <= 0.68
                 and (texture_score >= 18.0 or mean_saturation >= 45.0)
             )
@@ -313,6 +317,7 @@ class ImprovedDiseaseDetection:
                 if best is None or score > best[0]:
                     best = (
                         score,
+                        int(index),
                         int(x),
                         int(y),
                         int(component_width),
@@ -324,7 +329,16 @@ class ImprovedDiseaseDetection:
             if best is None:
                 return None, {"is_stem": False, "reason": "stem_not_found"}
 
-            _, x, y, component_width, component_height, area_ratio, centre_distance = best
+            (
+                _,
+                component_index,
+                x,
+                y,
+                component_width,
+                component_height,
+                area_ratio,
+                centre_distance,
+            ) = best
             # A stem should be reasonably centred; otherwise this is likely a
             # background plant rather than the intended subject.
             if centre_distance > 0.34:
@@ -352,13 +366,27 @@ class ImprovedDiseaseDetection:
                     "roi_area_ratio": roi_area_ratio,
                 }
 
-            stem_region = image.crop((left, top, right, bottom))
-            return stem_region, {
+            # Mask out every pixel outside the chosen stem component. A plain
+            # rectangle still contains soil, leaves, pots, and other objects;
+            # a disease-only model can otherwise classify that background.
+            component_mask = np.where(labels == component_index, 255, 0).astype(np.uint8)
+            dilation_size = max(3, int(round(min(width, height) * 0.018)) | 1)
+            dilation_kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (dilation_size, dilation_size)
+            )
+            focus_mask = cv2.dilate(component_mask, dilation_kernel, iterations=1)
+            focus_crop = focus_mask[top:bottom, left:right] > 0
+            rgb_crop = rgb[top:bottom, left:right].copy()
+            fill_colour = np.median(rgb[component_mask > 0], axis=0).astype(np.uint8)
+            rgb_crop[~focus_crop] = fill_colour
+
+            return Image.fromarray(rgb_crop), {
                 "is_stem": True,
                 "component_area_ratio": area_ratio,
                 "roi_area_ratio": roi_area_ratio,
                 "centre_distance": centre_distance,
                 "bbox": [left, top, right, bottom],
+                "background_masked": True,
             }
         except Exception as exc:
             logger.error(f"Error extracting stem region: {str(exc)}")
@@ -430,18 +458,15 @@ class ImprovedDiseaseDetection:
         quality_multiplier = 1.0 + max(0.0, 0.7 - float(quality_score)) * 0.5
 
         candidates = []
-        for rank, (disease_name, confidence) in enumerate(sorted_predictions[:4]):
+        for disease_name, confidence in sorted_predictions[:4]:
             required_confidence = self.confidence_thresholds.get(
                 disease_name, self.min_confidence
             ) * quality_multiplier
 
             if disease_name == "Stem_Canker":
-                required_confidence = max(required_confidence, 0.45)
+                required_confidence = max(required_confidence, 0.90)
 
-            if rank > 0:
-                required_confidence *= 0.9
-
-            if confidence < max(required_confidence, 0.18):
+            if confidence < required_confidence:
                 continue
 
             candidates.append(
@@ -456,7 +481,13 @@ class ImprovedDiseaseDetection:
         return sorted_predictions, candidates
 
     def _aggregate_tile_candidates(self, tile_candidates):
-        """Group per-tile candidates into a final multiple-disease result list."""
+        """Return only disease labels confirmed in the full stem and a tile.
+
+        A disease-only classifier always chooses one of its disease labels.
+        Requiring the same high-confidence label in both views prevents a
+        background detail, normal stem spine, or one weak crop from becoming a
+        false diagnosis.
+        """
         grouped = {}
         for candidate in tile_candidates:
             grouped.setdefault(candidate["disease_name"], []).append(candidate)
@@ -464,44 +495,30 @@ class ImprovedDiseaseDetection:
         scored_diseases = []
 
         for disease_name, entries in grouped.items():
-            confidences = [entry["confidence"] for entry in entries]
-            peak_confidence = max(confidences)
-            average_confidence = sum(confidences) / len(confidences)
-            tile_support = len(entries)
+            whole_image_entries = [
+                entry for entry in entries if entry["source"] == "whole_image"
+            ]
+            tile_entries = [
+                entry for entry in entries if entry["source"] != "whole_image"
+            ]
 
-            severity = self.get_disease_severity(disease_name)
-            base_threshold = self.confidence_thresholds.get(
-                disease_name, self.min_confidence
-            )
-            if disease_name == "Stem_Canker":
-                base_threshold = max(base_threshold, 0.45)
-
-            support_bonus = min(0.15, 0.05 * max(tile_support - 1, 0))
-            confidence_score = min(
-                1.0,
-                (peak_confidence * 0.55)
-                + (average_confidence * 0.25)
-                + support_bonus,
-            )
-
-            minimum_score = max(0.16, base_threshold * 0.55)
-
-            # If a disease appears repeatedly across tiles, keep it even when the
-            # average score is lower than the primary disease.
-            if tile_support >= 2:
-                minimum_score = min(minimum_score, base_threshold * 0.45)
-
-            if confidence_score < minimum_score:
+            # Both the complete stem and at least one focused crop must agree.
+            # Do not inflate a weak score with a tile-count bonus.
+            if not whole_image_entries or not tile_entries:
                 continue
+
+            whole_confidence = max(entry["confidence"] for entry in whole_image_entries)
+            tile_confidence = max(entry["confidence"] for entry in tile_entries)
+            confirmed_confidence = min(whole_confidence, tile_confidence)
 
             scored_diseases.append(
                 {
                     "disease_name": disease_name,
-                    "confidence": confidence_score,
-                    "severity": severity,
-                    "tile_support": tile_support,
-                    "peak_confidence": peak_confidence,
-                    "average_confidence": average_confidence,
+                    "confidence": confirmed_confidence,
+                    "severity": self.get_disease_severity(disease_name),
+                    "tile_support": len(tile_entries),
+                    "whole_image_confidence": whole_confidence,
+                    "tile_confidence": tile_confidence,
                 }
             )
 
@@ -510,60 +527,7 @@ class ImprovedDiseaseDetection:
             reverse=True,
         )
 
-        detected_diseases = scored_diseases[:3]
-
-        # If only one disease survives the score floor but there is another
-        # plausible disease in the image, keep the next-best candidate so mixed
-        # infections do not collapse back to a single label.
-        if len(detected_diseases) < 2 and len(scored_diseases) < len(grouped):
-            remaining = []
-            for disease_name, entries in grouped.items():
-                if any(item["disease_name"] == disease_name for item in detected_diseases):
-                    continue
-
-                confidences = [entry["confidence"] for entry in entries]
-                peak_confidence = max(confidences)
-                if peak_confidence < 0.15:
-                    continue
-
-                average_confidence = sum(confidences) / len(confidences)
-                tile_support = len(entries)
-                severity = self.get_disease_severity(disease_name)
-                base_threshold = self.confidence_thresholds.get(
-                    disease_name, self.min_confidence
-                )
-                if disease_name == "Stem_Canker":
-                    base_threshold = max(base_threshold, 0.45)
-
-                support_bonus = min(0.12, 0.04 * max(tile_support - 1, 0))
-                fallback_score = min(
-                    1.0,
-                    (peak_confidence * 0.5)
-                    + (average_confidence * 0.2)
-                    + support_bonus,
-                )
-
-                if fallback_score < max(0.14, base_threshold * 0.35):
-                    continue
-
-                remaining.append(
-                    {
-                        "disease_name": disease_name,
-                        "confidence": fallback_score,
-                        "severity": severity,
-                        "tile_support": tile_support,
-                        "peak_confidence": peak_confidence,
-                        "average_confidence": average_confidence,
-                    }
-                )
-
-            remaining.sort(
-                key=lambda item: (item["confidence"], item.get("tile_support", 0)),
-                reverse=True,
-            )
-            detected_diseases.extend(remaining[: 2 - len(detected_diseases)])
-
-        return detected_diseases[:3]
+        return scored_diseases[:3]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
@@ -787,10 +751,20 @@ class ImprovedDiseaseDetection:
             detected_diseases = self._aggregate_tile_candidates(all_candidates)
 
             if not detected_diseases:
-                result = self.validate_prediction(
-                    whole_image_predictions,
-                    quality["quality_score"],
-                )
+                # Do not fall back to the model's top class here: it has no
+                # healthy class and would force a disease label.  A diagnosis
+                # needs high, consistent evidence from the full stem and a
+                # focused tile; otherwise surface an explicit no-detection.
+                result = {
+                    "success": True,
+                    "disease_name": None,
+                    "confidence": 0,
+                    "severity": "none",
+                    "message": "No disease detection found. No clear and consistent disease symptoms were identified.",
+                    "reason": "insufficient_disease_evidence",
+                    "all_predictions": whole_sorted_predictions[:5],
+                    "detected_diseases": [],
+                }
             else:
                 primary_disease = detected_diseases[0]
                 result = {

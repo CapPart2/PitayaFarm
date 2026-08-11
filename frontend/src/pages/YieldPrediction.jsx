@@ -644,7 +644,13 @@ export default function YieldPrediction() {
               {!loadingDetect && detectionResult && (
                 <div>
                   <img src={detectionResult.annotated_image} alt="Annotated" className="w-full mb-2" />
-                  <ul className="space-y-1 text-sm mb-3">
+                  {detectionResult.detections.length === 0 ? (
+                    <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                      <strong>No mature detection found</strong>
+                      <p className="mt-1 text-xs">{detectionResult.message || 'No mature dragon fruit was identified in this image.'}</p>
+                    </div>
+                  ) : (
+                    <ul className="space-y-1 text-sm mb-3">
                     {detectionResult.detections.map((d, i) => (
                       <li key={i} className="flex items-center justify-between">
                         <div>
@@ -654,13 +660,14 @@ export default function YieldPrediction() {
                         <div className="text-xs text-gray-600 dark:text-gray-300">Box: {d.box.map(n => Math.round(n)).join(', ')}</div>
                       </li>
                     ))}
-                  </ul>
+                    </ul>
+                  )}
                   {(() => {
                     const fruitCount = detectionResult.detections.length
                     return (
                       <div className="border-t pt-3 space-y-2">
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          Fruits detected: <span className="font-semibold text-pitaya-primary">{fruitCount}</span>
+                          {fruitCount > 0 ? <>Mature fruits detected: <span className="font-semibold text-pitaya-primary">{fruitCount}</span></> : 'No mature detection found'}
                         </p>
                         <div className="flex flex-col gap-1">
                           <label className="text-xs text-gray-500 dark:text-gray-400 font-medium">Block / Location</label>
