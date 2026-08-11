@@ -28,6 +28,7 @@ import {
     YAxis
 } from 'recharts'
 import { adminAuthApi, adminDetectionsApi, adminYieldApi } from '../api/adminApi'
+import AdminPagination from '../components/AdminPagination'
 
 const container = {
   hidden: { opacity: 0 },
@@ -414,14 +415,14 @@ export default function AdminReports() {
         className="space-y-6"
       >
         {/* Header */}
-        <motion.div variants={item} className="flex items-center justify-between">
+        <motion.div variants={item} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Reports</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">Stem Disease & Yield Analysis</p>
           </div>
           <button
             onClick={() => setShowPreviewModal(true)}
-            className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors"
+            className="flex min-h-[44px] w-full items-center justify-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors sm:w-auto"
           >
             <Download className="w-4 h-4" />
             Download PDF
@@ -430,10 +431,10 @@ export default function AdminReports() {
 
         {/* Tabs */}
         <motion.div variants={item} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-          <div className="flex border-b border-gray-200 dark:border-gray-700">
+          <div className="flex overflow-x-auto border-b border-gray-200 dark:border-gray-700">
             <button
               onClick={() => setActiveTab('disease')}
-              className={`flex items-center gap-2 px-6 py-4 font-medium transition-colors ${
+              className={`flex min-w-max items-center gap-2 px-4 py-4 font-medium transition-colors sm:px-6 ${
                 activeTab === 'disease'
                   ? 'text-orange-600 dark:text-orange-400 border-b-2 border-orange-600'
                   : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
@@ -444,7 +445,7 @@ export default function AdminReports() {
             </button>
             <button
               onClick={() => setActiveTab('yield')}
-              className={`flex items-center gap-2 px-6 py-4 font-medium transition-colors ${
+              className={`flex min-w-max items-center gap-2 px-4 py-4 font-medium transition-colors sm:px-6 ${
                 activeTab === 'yield'
                   ? 'text-orange-600 dark:text-orange-400 border-b-2 border-orange-600'
                   : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
@@ -614,43 +615,14 @@ export default function AdminReports() {
                 </table>
               </div>
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, detections.length)} of {detections.length} entries
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => paginate(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Previous
-                    </button>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                      <button
-                        key={page}
-                        onClick={() => paginate(page)}
-                        className={`px-3 py-1 rounded border text-sm ${
-                          currentPage === page
-                            ? 'bg-orange-600 text-white border-orange-600'
-                            : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white'
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => paginate(currentPage + 1)}
-                      disabled={currentPage === totalPages}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              )}
+              <AdminPagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={paginate}
+                start={indexOfFirstRecord + 1}
+                end={Math.min(indexOfLastRecord, detections.length)}
+                total={detections.length}
+              />
             </div>
           </motion.div>
         )}
@@ -794,43 +766,14 @@ export default function AdminReports() {
                 </table>
               </div>
 
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, yieldPredictions.length)} of {yieldPredictions.length} entries
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => paginate(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Previous
-                    </button>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                      <button
-                        key={page}
-                        onClick={() => paginate(page)}
-                        className={`px-3 py-1 rounded border text-sm ${
-                          currentPage === page
-                            ? 'bg-orange-600 text-white border-orange-600'
-                            : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white'
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => paginate(currentPage + 1)}
-                      disabled={currentPage === totalPages}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              )}
+              <AdminPagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={paginate}
+                start={indexOfFirstRecord + 1}
+                end={Math.min(indexOfLastRecord, yieldPredictions.length)}
+                total={yieldPredictions.length}
+              />
             </div>
           </motion.div>
         )}
@@ -845,7 +788,7 @@ export default function AdminReports() {
             animate={{ opacity: 1, scale: 1 }}
             className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto"
           >
-            <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-6 flex items-center justify-between">
+            <div className="sticky top-0 flex items-start justify-between gap-3 bg-white p-4 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 sm:p-6">
               <h2 className="text-xl font-bold text-gray-900 dark:text-white">
                 Report Preview - {activeTab === 'disease' ? 'Disease Analysis' : 'Yield Analysis'}
               </h2>
@@ -860,10 +803,10 @@ export default function AdminReports() {
               </button>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div className="space-y-6 p-4 sm:p-6">
               {/* Summary Cards */}
               {activeTab === 'disease' ? (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                     <p className="text-sm text-gray-500 dark:text-gray-400">Total Detections</p>
                     <p className="text-2xl font-bold text-gray-900 dark:text-white">{detections.length}</p>
@@ -878,7 +821,7 @@ export default function AdminReports() {
                   </div>
                 </div>
               ) : (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
                   <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
                     <p className="text-sm text-gray-500 dark:text-gray-400">Total Predictions</p>
                     <p className="text-2xl font-bold text-gray-900 dark:text-white">{yieldPredictions.length}</p>
@@ -906,7 +849,7 @@ export default function AdminReports() {
               )}
 
               {/* Charts Preview */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 {activeTab === 'disease' ? (
                   <>
                     <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">

@@ -15,6 +15,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { adminAuthApi, adminUsersApi } from '../api/adminApi'
+import AdminPagination from '../components/AdminPagination'
 
 const container = {
   hidden: { opacity: 0 },
@@ -233,14 +234,14 @@ export default function AdminUsers() {
         className="space-y-6"
       >
         {/* Header with Add Button */}
-        <motion.div variants={item} className="flex items-center justify-between">
+        <motion.div variants={item} className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold text-gray-900 dark:text-white">User Management</h2>
             <p className="text-sm text-gray-500 dark:text-gray-400">Manage system users and permissions</p>
           </div>
           <button
             onClick={openCreateModal}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+            className="flex min-h-[44px] w-full items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors sm:w-auto"
           >
             <Plus className="w-4 h-4" />
             Add User
@@ -425,43 +426,15 @@ export default function AdminUsers() {
             </table>
           </div>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="text-sm text-gray-500 dark:text-gray-400">
-                Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, filteredUsers.length)} of {filteredUsers.length} entries
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => paginate(currentPage - 1)}
-                  disabled={currentPage === 1}
-                  className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                >
-                  Previous
-                </button>
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page}
-                    onClick={() => paginate(page)}
-                    className={`px-3 py-1 rounded border text-sm ${
-                      currentPage === page
-                        ? 'bg-blue-600 text-white border-blue-600'
-                        : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white'
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
-                <button
-                  onClick={() => paginate(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                  className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
+          <AdminPagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            onPageChange={paginate}
+            start={indexOfFirstRecord + 1}
+            end={Math.min(indexOfLastRecord, filteredUsers.length)}
+            total={filteredUsers.length}
+            accent="blue"
+          />
         </motion.div>
       </motion.div>
 
@@ -530,7 +503,7 @@ export default function AdminUsers() {
                   placeholder="Enter full name"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                     Role
@@ -560,7 +533,7 @@ export default function AdminUsers() {
                   </select>
                 </div>
               </div>
-              <div className="flex gap-3 pt-4">
+              <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                 <button
                   type="button"
                   onClick={() => {

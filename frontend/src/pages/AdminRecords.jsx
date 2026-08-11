@@ -11,6 +11,7 @@ import {
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { adminAuthApi, adminDetectionsApi, adminYieldApi } from '../api/adminApi'
+import AdminPagination from '../components/AdminPagination'
 
 const container = {
   hidden: { opacity: 0 },
@@ -163,13 +164,13 @@ export default function AdminRecords() {
         >
           {/* Tabs */}
           <motion.div variants={item} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-            <div className="flex border-b border-gray-200 dark:border-gray-700">
+            <div className="flex overflow-x-auto border-b border-gray-200 dark:border-gray-700">
               <button
                 onClick={() => {
                   setActiveTab('detections')
                   setSearchTerm('')
                 }}
-                className={`flex items-center gap-2 px-6 py-4 font-medium transition-colors ${
+                className={`flex min-w-max items-center gap-2 px-4 py-4 font-medium transition-colors sm:px-6 ${
                   activeTab === 'detections'
                     ? 'text-green-600 dark:text-green-400 border-b-2 border-green-600'
                     : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
@@ -183,7 +184,7 @@ export default function AdminRecords() {
                   setActiveTab('yield')
                   setSearchTerm('')
                 }}
-                className={`flex items-center gap-2 px-6 py-4 font-medium transition-colors ${
+                className={`flex min-w-max items-center gap-2 px-4 py-4 font-medium transition-colors sm:px-6 ${
                   activeTab === 'yield'
                     ? 'text-green-600 dark:text-green-400 border-b-2 border-green-600'
                     : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
@@ -297,43 +298,14 @@ export default function AdminRecords() {
                   </tbody>
                 </table>
               </div>
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, filteredDetections.length)} of {filteredDetections.length} entries
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => paginate(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Previous
-                    </button>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                      <button
-                        key={page}
-                        onClick={() => paginate(page)}
-                        className={`px-3 py-1 rounded border text-sm ${
-                          currentPage === page
-                            ? 'bg-purple-600 text-white border-purple-600'
-                            : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white'
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => paginate(currentPage + 1)}
-                      disabled={currentPage === totalPages}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              )}
+              <AdminPagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={paginate}
+                start={indexOfFirstRecord + 1}
+                end={Math.min(indexOfLastRecord, filteredDetections.length)}
+                total={filteredDetections.length}
+              />
             </motion.div>
           )}
 
@@ -413,43 +385,14 @@ export default function AdminRecords() {
                 </table>
               </div>
               
-              {/* Pagination */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
-                  <div className="text-sm text-gray-500 dark:text-gray-400">
-                    Showing {indexOfFirstRecord + 1} to {Math.min(indexOfLastRecord, filteredYieldPredictions.length)} of {filteredYieldPredictions.length} entries
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => paginate(currentPage - 1)}
-                      disabled={currentPage === 1}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Previous
-                    </button>
-                    {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                      <button
-                        key={page}
-                        onClick={() => paginate(page)}
-                        className={`px-3 py-1 rounded border text-sm ${
-                          currentPage === page
-                            ? 'bg-purple-600 text-white border-purple-600'
-                            : 'border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white'
-                        }`}
-                      >
-                        {page}
-                      </button>
-                    ))}
-                    <button
-                      onClick={() => paginate(currentPage + 1)}
-                      disabled={currentPage === totalPages}
-                      className="px-3 py-1 rounded border border-gray-300 dark:border-gray-600 text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-white"
-                    >
-                      Next
-                    </button>
-                  </div>
-                </div>
-              )}
+              <AdminPagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                onPageChange={paginate}
+                start={indexOfFirstRecord + 1}
+                end={Math.min(indexOfLastRecord, filteredYieldPredictions.length)}
+                total={filteredYieldPredictions.length}
+              />
             </motion.div>
           )}
         </motion.div>
