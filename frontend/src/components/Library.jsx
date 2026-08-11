@@ -15,7 +15,7 @@ import {
     X
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import LoadingSpinner from './LoadingSpinner';
 
 // Disease image mapping for comprehensive dragon fruit diseases
@@ -32,6 +32,7 @@ const diseaseImages = {
 };
 
 const OVERRIDES_STORAGE_KEY = 'pitaya.diseaseLibrary.overrides.v1';
+const EMPTY_OVERRIDES = Object.freeze({});
 
 const ROOT_REMOVAL_MESSAGE = 'Remove infected roots immediately to prevent spread of disease.';
 const ROOT_REMOVAL_PROTOCOL_STEPS = [
@@ -54,6 +55,16 @@ const normalizeList = (value) => {
   }
   return [];
 };
+
+const valueToLines = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap((item) => valueToLines(item));
+  if (typeof value === 'string') return normalizeList(value);
+  if (typeof value === 'object') return Object.values(value).flatMap((item) => valueToLines(item));
+  return [String(value)].filter(Boolean);
+};
+
+const toMultilineText = (value) => valueToLines(value).join('\n');
 
 const flattenRecommendedTreatmentsToSteps = (treatmentsData) => {
   if (!treatmentsData) return [];
@@ -117,6 +128,17 @@ const classifyStep = (step) => {
   return { isRoot, isCutRemove };
 };
 
+const isCurrentUserAdmin = () => {
+  try {
+    const raw = localStorage.getItem('pitayaUser');
+    if (!raw) return false;
+    const user = JSON.parse(raw);
+    return user?.isAdmin === true || String(user?.Role || '').toLowerCase() === 'admin';
+  } catch {
+    return false;
+  }
+};
+
 const Library = () => {
   const [diseases, setDiseases] = useState({});
   const [filteredDiseases, setFilteredDiseases] = useState({});
@@ -135,11 +157,21 @@ const Library = () => {
   const [confirmMessage, setConfirmMessage] = useState('');
   const [adminDraft, setAdminDraft] = useState({
     diseaseName: '',
+    descriptionText: '',
     symptomsText: '',
+    causesText: '',
+    preventionText: '',
     treatmentSteps: [''],
     requiresRootRemoval: false,
     severity_level: 'medium',
   });
+
+  const isAdminUser = useMemo(() => isCurrentUserAdmin(), []);
+  const location = useLocation();
+  const canEditLibrary = isAdminUser && location.pathname.startsWith('/admin');
+  // Keep the non-admin fallback reference stable so filtering does not re-run
+  // indefinitely after it updates filteredDiseases.
+  const activeOverrides = canEditLibrary ? overrides : EMPTY_OVERRIDES;
 
   const navigate = useNavigate();
 
@@ -149,6 +181,7 @@ const Library = () => {
   }, []);
 
   useEffect(() => {
+    if (!canEditLibrary) return;
     try {
       const raw = localStorage.getItem(OVERRIDES_STORAGE_KEY);
       if (!raw) return;
@@ -157,25 +190,26 @@ const Library = () => {
     } catch {
       // ignore
     }
-  }, []);
+  }, [canEditLibrary]);
 
   useEffect(() => {
+    if (!canEditLibrary) return;
     try {
       localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(overrides));
     } catch {
       // ignore
     }
-  }, [overrides]);
+  }, [canEditLibrary, overrides]);
 
   useEffect(() => {
     filterDiseases();
-  }, [searchTerm, diseases, severityFilter, overrides]);
+  }, [searchTerm, diseases, severityFilter, activeOverrides]);
 
   const effectiveDisease = useMemo(() => {
     if (!selectedDiseaseName) return null;
     const base = diseases?.[selectedDiseaseName];
     if (!base) return null;
-    const o = overrides?.[selectedDiseaseName] || {};
+    const o = activeOverrides?.[selectedDiseaseName] || {};
     const severity_level = (o.severity_level || base.severity_level || 'medium').toLowerCase();
     const requiresRootRemoval =
       typeof o.requiresRootRemoval === 'boolean'
@@ -190,11 +224,14 @@ const Library = () => {
       severity_level,
       requiresRootRemoval,
       _admin: {
+        descriptionText: o.descriptionText || '',
         symptomsText: o.symptomsText || '',
+        causesText: o.causesText || '',
+        preventionText: o.preventionText || '',
         treatmentSteps: Array.isArray(o.treatmentSteps) ? o.treatmentSteps : null,
       },
     };
-  }, [diseases, overrides, selectedDiseaseName]);
+  }, [diseases, activeOverrides, selectedDiseaseName]);
 
   const motionCard = {
     initial: { opacity: 0, y: 10 },
@@ -225,7 +262,12 @@ const Library = () => {
   };
 
   const openAdminEditor = (disease) => {
+    if (!canEditLibrary) return;
     const o = overrides?.[disease.name] || {};
+    const descriptionSource = getTranslatedText(disease.name, 'description', disease.description || '');
+    const symptomsSource = getTranslatedText(disease.name, 'symptoms', disease.symptoms || []);
+    const causesSource = getTranslatedText(disease.name, 'causes', disease.causes || []);
+    const preventionSource = getTranslatedText(disease.name, 'prevention_methods', disease.prevention_methods || []);
     const treatmentsData = language === 'tagalog'
       ? getTranslatedText(disease.name, 'recommended_treatments', disease.recommended_treatments)
       : disease.recommended_treatments;
@@ -239,7 +281,10 @@ const Library = () => {
 
     setAdminDraft({
       diseaseName: disease.name,
-      symptomsText: o.symptomsText || '',
+      descriptionText: o.descriptionText || toMultilineText(descriptionSource),
+      symptomsText: o.symptomsText || toMultilineText(symptomsSource),
+      causesText: o.causesText || toMultilineText(causesSource),
+      preventionText: o.preventionText || toMultilineText(preventionSource),
       treatmentSteps: steps,
       requiresRootRemoval:
         typeof o.requiresRootRemoval === 'boolean'
@@ -248,7 +293,7 @@ const Library = () => {
       severity_level: (o.severity_level || disease.severity_level || 'medium').toLowerCase(),
     });
     // Show confirmation dialog instead of opening directly
-    setConfirmMessage(`Open admin editor for "${disease.name}"? This will allow you to edit treatment information.`);
+    setConfirmMessage(`Open admin editor for "${disease.name}"? This will allow you to edit all library details.`);
     setConfirmAction(() => () => {
       setAdminOpen(true);
       setShowConfirmDialog(false);
@@ -257,16 +302,20 @@ const Library = () => {
   };
 
   const saveAdminDraft = () => {
+    if (!canEditLibrary) return;
     const name = adminDraft.diseaseName;
     if (!name) return;
     // Show confirmation dialog instead of saving directly
-    setConfirmMessage(`Save changes for "${name}"? This will update the treatment information locally.`);
+    setConfirmMessage(`Save changes for "${name}"? This will update the library information locally.`);
     setConfirmAction(() => () => {
       setOverrides((prev) => ({
         ...prev,
         [name]: {
           ...prev[name],
+          descriptionText: String(adminDraft.descriptionText || ''),
           symptomsText: String(adminDraft.symptomsText || ''),
+          causesText: String(adminDraft.causesText || ''),
+          preventionText: String(adminDraft.preventionText || ''),
           treatmentSteps: normalizeList(adminDraft.treatmentSteps),
           requiresRootRemoval: Boolean(adminDraft.requiresRootRemoval),
           severity_level: String(adminDraft.severity_level || 'medium').toLowerCase(),
@@ -280,6 +329,7 @@ const Library = () => {
   };
 
   const resetAdminOverrides = (diseaseName) => {
+    if (!canEditLibrary) return;
     // Show confirmation dialog instead of resetting directly
     setConfirmMessage(`Reset all changes for "${diseaseName}"? This will restore original treatment information and cannot be undone.`);
     setConfirmAction(() => () => {
@@ -431,7 +481,7 @@ const Library = () => {
     if (severityFilter !== 'all') {
       filtered = Object.fromEntries(
         Object.entries(filtered).filter(([_, info]) => 
-          (overrides?.[_]?.severity_level || info.severity_level || '').toLowerCase() === severityFilter.toLowerCase()
+          (activeOverrides?.[_]?.severity_level || info.severity_level || '').toLowerCase() === severityFilter.toLowerCase()
         )
       );
     }
@@ -441,15 +491,23 @@ const Library = () => {
       const term = searchTerm.toLowerCase();
       filtered = Object.fromEntries(
         Object.entries(filtered).filter(([name, info]) => {
-          const adminSteps = overrides?.[name]?.treatmentSteps || [];
+          const adminSteps = activeOverrides?.[name]?.treatmentSteps || [];
           const adminStepsText = Array.isArray(adminSteps) ? adminSteps.join(' ') : '';
+          const adminDescription = String(activeOverrides?.[name]?.descriptionText || '');
+          const adminSymptoms = String(activeOverrides?.[name]?.symptomsText || '');
+          const adminCauses = String(activeOverrides?.[name]?.causesText || '');
+          const adminPrevention = String(activeOverrides?.[name]?.preventionText || '');
           return (
             name.toLowerCase().includes(term) ||
             searchInObject(info.symptoms, term) ||
             searchInObject(info.causes, term) ||
             searchInObject(info.prevention_methods, term) ||
             searchInObject(info.recommended_treatments, term) ||
-            adminStepsText.toLowerCase().includes(term)
+            adminStepsText.toLowerCase().includes(term) ||
+            adminDescription.toLowerCase().includes(term) ||
+            adminSymptoms.toLowerCase().includes(term) ||
+            adminCauses.toLowerCase().includes(term) ||
+            adminPrevention.toLowerCase().includes(term)
           );
         })
       );
@@ -497,7 +555,7 @@ const Library = () => {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => (window.history.length > 1 ? navigate(-1) : navigate('/app/dashboard'))}
+              onClick={() => (window.history.length > 1 ? navigate(-1) : navigate(isAdminUser ? '/admin/dashboard' : '/app/dashboard'))}
               className="inline-flex items-center justify-center w-10 h-10 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm hover:shadow transition-all"
               aria-label="Back"
             >
@@ -645,7 +703,7 @@ const Library = () => {
       <motion.div layout className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {Object.entries(filteredDiseases || {}).map(([name, info]) => {
           if (!info || !name) return null;
-          const o = overrides?.[name] || {};
+          const o = activeOverrides?.[name] || {};
           const effectiveSeverity = (o.severity_level || info.severity_level || 'medium').toLowerCase();
           const requiresRootRemoval =
             typeof o.requiresRootRemoval === 'boolean'
@@ -700,7 +758,7 @@ const Library = () => {
               {/* Disease Description */}
               <div className="mb-4">
                 <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2">
-                  {getTranslatedText(name, 'description', info.description || 'No description available')}
+                  {String(activeOverrides?.[name]?.descriptionText || '').trim() || getTranslatedText(name, 'description', info.description || 'No description available')}
                 </p>
               </div>
 
@@ -742,6 +800,13 @@ const Library = () => {
                   </h4>
                   <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
                     {(() => {
+                      const adminSymptomsText = String(activeOverrides?.[name]?.symptomsText || '').trim();
+                      if (adminSymptomsText) {
+                        const lines = normalizeList(adminSymptomsText);
+                        return lines.slice(0, 2).join('. ') ||
+                               (language === 'tagalog' ? 'Walang sintomas na available' : 'No symptoms available');
+                      }
+
                       const symptoms = getTranslatedText(name, 'symptoms', info.symptoms);
                       if (symptoms && typeof symptoms === 'object' && !Array.isArray(symptoms)) {
                         const visibleSigns = symptoms.visible_signs || [];
@@ -762,6 +827,13 @@ const Library = () => {
                   </h4>
                   <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
                     {(() => {
+                      const adminPreventionText = String(activeOverrides?.[name]?.preventionText || '').trim();
+                      if (adminPreventionText) {
+                        const lines = normalizeList(adminPreventionText);
+                        return lines.slice(0, 2).join('. ') ||
+                               (language === 'tagalog' ? 'Walang paraan sa pag-iwas' : 'No prevention methods available');
+                      }
+
                       const prevention = getTranslatedText(name, 'prevention_methods', info.prevention_methods);
                       if (prevention && typeof prevention === 'object' && !Array.isArray(prevention)) {
                         const farmSanitation = prevention.farm_sanitation || [];
@@ -851,9 +923,20 @@ const Library = () => {
               {/* Modal Header */}
               <div className="mb-6">
                 <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-2">{effectiveDisease.name}</h2>
-                <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full border text-sm font-medium ${getSeverityColor(effectiveDisease.severity_level)}`}>
-                  {getSeverityIcon(effectiveDisease.severity_level)}
-                  <span>{effectiveDisease.severity_level?.toUpperCase()} SEVERITY</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full border text-sm font-medium ${getSeverityColor(effectiveDisease.severity_level)}`}>
+                    {getSeverityIcon(effectiveDisease.severity_level)}
+                    <span>{effectiveDisease.severity_level?.toUpperCase()} SEVERITY</span>
+                  </div>
+                  {canEditLibrary && (
+                    <button
+                      type="button"
+                      onClick={() => openAdminEditor(effectiveDisease)}
+                      className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-pitaya-leaf/40 bg-pitaya-bg/60 text-pitaya-deep hover:bg-pitaya-bg transition-colors text-sm font-semibold"
+                    >
+                      Edit Library
+                    </button>
+                  )}
                 </div>
               </div>
 
@@ -910,7 +993,7 @@ const Library = () => {
                   {language === 'tagalog' ? 'Deskripsyon ng Sakit' : 'Disease Description'}
                 </h3>
                 <p className="text-gray-700 dark:text-gray-300 leading-relaxed">
-                  {getTranslatedText(effectiveDisease.name, 'description', effectiveDisease.description || 'No description available')}
+                  {String(effectiveDisease._admin?.descriptionText || '').trim() || getTranslatedText(effectiveDisease.name, 'description', effectiveDisease.description || 'No description available')}
                 </p>
               </div>
 
@@ -1034,6 +1117,21 @@ const Library = () => {
                   </h3>
                   <div className="space-y-4">
                     {(() => {
+                      const adminCauses = String(effectiveDisease._admin?.causesText || '').trim();
+                      if (adminCauses) {
+                        const items = normalizeList(adminCauses);
+                        return (
+                          <ul className="space-y-2">
+                            {items.map((cause, index) => (
+                              <li key={index} className="flex items-start gap-2">
+                                <span className="text-green-500 mt-1">•</span>
+                                <span className="text-gray-700 dark:text-gray-300">{cause}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        );
+                      }
+
                       const causesData = language === 'tagalog'
                         ? getTranslatedText(effectiveDisease.name, 'causes', effectiveDisease.causes)
                         : effectiveDisease.causes;
@@ -1122,7 +1220,7 @@ const Library = () => {
                         ? getTranslatedText(effectiveDisease.name, 'recommended_treatments', effectiveDisease.recommended_treatments)
                         : effectiveDisease.recommended_treatments;
 
-                      const adminSteps = overrides?.[effectiveDisease.name]?.treatmentSteps;
+                      const adminSteps = activeOverrides?.[effectiveDisease.name]?.treatmentSteps;
                       const baseSteps = flattenRecommendedTreatmentsToSteps(treatmentsData);
                       const stepsFromAdmin = Array.isArray(adminSteps) && adminSteps.length ? adminSteps : [];
 
@@ -1178,7 +1276,7 @@ const Library = () => {
 
                 {/* Admin Editor */}
                 <AnimatePresence>
-                  {adminOpen && adminDraft.diseaseName === effectiveDisease.name && (
+                  {canEditLibrary && adminOpen && adminDraft.diseaseName === effectiveDisease.name && (
                     <motion.div
                       initial={{ opacity: 0, y: 10 }}
                       animate={{ opacity: 1, y: 0 }}
@@ -1188,8 +1286,8 @@ const Library = () => {
                     >
                       <div className="flex items-center justify-between gap-3">
                         <div>
-                          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Admin: Edit Treatment</h3>
-                          <p className="text-sm text-gray-600 dark:text-gray-300">Changes are saved locally in this browser.</p>
+                          <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100">Admin: Edit Library Content</h3>
+                          <p className="text-sm text-gray-600 dark:text-gray-300">You can edit description, symptoms, causes, prevention, and treatment. Changes are saved locally in this browser.</p>
                         </div>
                         <button
                           type="button"
@@ -1226,6 +1324,18 @@ const Library = () => {
 
                         <div className="sm:col-span-2">
                           <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200">
+                            Description
+                          </label>
+                          <textarea
+                            value={adminDraft.descriptionText}
+                            onChange={(e) => setAdminDraft((d) => ({ ...d, descriptionText: e.target.value }))}
+                            placeholder="Disease description"
+                            className="mt-2 w-full min-h-[90px] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-gray-900 dark:text-gray-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200">
                             Symptoms
                           </label>
                           <textarea
@@ -1233,6 +1343,30 @@ const Library = () => {
                             onChange={(e) => setAdminDraft((d) => ({ ...d, symptomsText: e.target.value }))}
                             placeholder="One symptom per line"
                             className="mt-2 w-full min-h-[110px] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-gray-900 dark:text-gray-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200">
+                            Causes
+                          </label>
+                          <textarea
+                            value={adminDraft.causesText}
+                            onChange={(e) => setAdminDraft((d) => ({ ...d, causesText: e.target.value }))}
+                            placeholder="One cause per line"
+                            className="mt-2 w-full min-h-[100px] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-gray-900 dark:text-gray-100"
+                          />
+                        </div>
+
+                        <div className="sm:col-span-2">
+                          <label className="block text-sm font-semibold text-gray-700 dark:text-gray-200">
+                            Prevention
+                          </label>
+                          <textarea
+                            value={adminDraft.preventionText}
+                            onChange={(e) => setAdminDraft((d) => ({ ...d, preventionText: e.target.value }))}
+                            placeholder="One prevention step per line"
+                            className="mt-2 w-full min-h-[100px] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 px-4 py-3 text-gray-900 dark:text-gray-100"
                           />
                         </div>
 
@@ -1322,6 +1456,21 @@ const Library = () => {
 
                 {/* Prevention */}
                 {(() => {
+                      const adminPrevention = String(effectiveDisease._admin?.preventionText || '').trim();
+                      if (adminPrevention) {
+                        const items = normalizeList(adminPrevention);
+                        return (
+                          <ul className="space-y-2">
+                            {items.map((prevention, index) => (
+                              <li key={index} className="flex items-start gap-2">
+                                <span className="text-pitaya-primary mt-1">•</span>
+                                <span className="text-gray-700 dark:text-gray-300">{prevention}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        );
+                      }
+
                       const preventionData = language === 'tagalog' 
                         ? getTranslatedText(effectiveDisease.name, 'prevention_methods', effectiveDisease.prevention_methods)
                         : effectiveDisease.prevention_methods;

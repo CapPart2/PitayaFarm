@@ -161,7 +161,7 @@
                 <p>Sign in to access your PITAYAs dashboard.</p>
             </div>
 
-            <form method="POST" action="#">
+            <form id="loginForm" method="POST" action="#">
                 <label for="username">Username</label>
                 <input id="username" type="text" name="username" placeholder="Enter your username" required>
 
@@ -176,7 +176,7 @@
 
             <p class="foot-note">
                 Don’t have an account?
-                <a href="#">Create one</a>
+                <a href="/auth/register">Create one</a>
             </p>
         </div>
     </main>
@@ -191,6 +191,38 @@ document.addEventListener('DOMContentLoaded', function () {
             input.type = input.type === 'password' ? 'text' : 'password';
         });
     });
+    // Handle login form submit
+    const form = document.getElementById('loginForm')
+    form.addEventListener('submit', async function (e) {
+        e.preventDefault()
+        const username = document.getElementById('username').value.trim()
+        const password = document.getElementById('password').value
+
+        const msgEl = document.querySelector('.message') || (() => {
+            const el = document.createElement('div'); el.className = 'message'; form.parentNode.insertBefore(el, form.nextSibling); return el;
+        })()
+
+        try {
+            const res = await fetch('/api/auth/login', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            })
+            const data = await res.json()
+            if (res.ok && data.success) {
+                const role = data.user?.Role || 'user'
+                if (role === 'admin') {
+                    window.location.href = '/admin/dashboard'
+                } else {
+                    window.location.href = '/app/dashboard'
+                }
+            } else {
+                msgEl.textContent = data.error || 'Login failed'
+                msgEl.classList.remove('success')
+            }
+        } catch (err) {
+            msgEl.textContent = err.message || 'An error occurred'
+        }
+    })
 });
 </script>
 </body>

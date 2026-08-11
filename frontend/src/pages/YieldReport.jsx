@@ -1,7 +1,8 @@
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { BarChart2, Calendar, Download, Eye, FileText, Filter, Search, Trash2, TrendingUp, X } from 'lucide-react'
+import { AlertTriangle, BarChart2, Calendar, Download, Eye, FileText, Filter, Search, Trash2, TrendingUp, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { getPitayaUserScopeHeaders } from '../api/userScope'
 
 /* ─── helpers ─────────────────────────────────────────────── */
 const fmt = (ts) => {
@@ -110,7 +111,9 @@ const YieldReport = () => {
 
   const fetchRecords = async () => {
     try {
-      const res = await fetch('/api/dashboard/yield-predictions')
+      const res = await fetch('/api/dashboard/yield-predictions', {
+        headers: getPitayaUserScopeHeaders(),
+      })
       const root = await res.json()
       setRecords((root.data || []).map(r => ({
         id: r.id,
@@ -142,7 +145,10 @@ const YieldReport = () => {
 
   const deleteRecord = async (id) => {
     try {
-      const res = await fetch(`/api/dashboard/yield-predictions/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/dashboard/yield-predictions/${id}`, {
+        method: 'DELETE',
+        headers: getPitayaUserScopeHeaders(),
+      })
       if (res.ok) {
         setRecords(p => p.filter(r => r.id !== id))
         if (selectedRecord?.id === id) setSelectedRecord(null)
@@ -611,34 +617,50 @@ const YieldReport = () => {
           CONFIRM DELETE DIALOG
       ═══════════════════════════════════════════════════════ */}
       {confirmDelete && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
             <div className="p-6">
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
-                  <Trash2 className="w-6 h-6 text-red-600 dark:text-red-400" />
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/40 dark:to-red-800/30 flex items-center justify-center shrink-0 shadow-sm">
+                  <Trash2 className="w-7 h-7 text-red-600 dark:text-red-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">Delete Record?</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">This action cannot be undone.</p>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Delete Record</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">This action cannot be undone</p>
                 </div>
               </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-4 py-3 mb-6">
-                <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{confirmDelete.label}</p>
+
+              {/* Content Box */}
+              <div className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700/50 dark:to-gray-800/50 rounded-xl px-5 py-4 mb-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{confirmDelete.label}</p>
+                </div>
               </div>
+
+              {/* Warning Message */}
+              <div className="flex items-start gap-3 mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  Deleting this record will permanently remove it from the database. Make sure you have a backup if needed.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
               <div className="flex gap-3">
                 <button
                   onClick={() => setConfirmDelete(null)}
-                  className="flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium"
+                  className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all duration-200 font-semibold"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={confirmAndDelete}
-                  className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors flex items-center justify-center gap-2"
+                  className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white font-semibold transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-red-500/25"
                 >
                   <Trash2 className="w-4 h-4" />
-                  Yes, Delete
+                  Delete
                 </button>
               </div>
             </div>

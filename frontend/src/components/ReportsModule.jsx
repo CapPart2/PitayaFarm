@@ -1,7 +1,9 @@
 import { AlertTriangle, Calendar, Download, Eye, FileText, Filter, Search, Trash2, TrendingUp, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { getPitayaUserScopeHeaders } from '../api/userScope';
 
 const ReportsModule = () => {
+  const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5001').replace(/\/$/, '');
   const [reports, setReports] = useState([]);
   const [filteredReports, setFilteredReports] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -32,14 +34,18 @@ const ReportsModule = () => {
 
   const fetchReports = async () => {
     try {
-      const response = await fetch('/api/dashboard/reports');
+      const response = await fetch(`${API_BASE}/api/dashboard/reports`, {
+        headers: getPitayaUserScopeHeaders(),
+      });
       const root = await response.json();
       const data = root.data || [];
       
       // Fetch disease information to populate symptoms, causes, and treatment
       let diseases = {};
       try {
-        const diseaseResponse = await fetch('/api/library/');
+        const diseaseResponse = await fetch(`${API_BASE}/api/library/`, {
+          headers: getPitayaUserScopeHeaders(),
+        });
         if (diseaseResponse.ok) {
           const diseaseData = await diseaseResponse.json();
           const diseaseList = diseaseData.data || [];
@@ -324,7 +330,10 @@ const ReportsModule = () => {
         // If multiple records in session, combine them
         if (records.length > 1) {
           const diseaseNames = records.map(r => r.DiseaseType || r.disease_name).join(', ');
-          const sumConfidence = records.reduce((sum, r) => sum + (r.Confidence || r.confidence_score || 0), 0);
+          const averageConfidence = records.reduce(
+            (sum, r) => sum + (r.Confidence || r.confidence_score || 0),
+            0
+          ) / records.length;
           const maxSeverity = records.some(r => (r.Severity || r.severity) === 'high') ? 'high' : 
                              records.some(r => (r.Severity || r.severity) === 'medium') ? 'medium' : 'low';
           
@@ -348,7 +357,7 @@ const ReportsModule = () => {
             timestamp: primaryRecord.DateTime || primaryRecord.detection_time,
             disease_name: diseaseNames,
             severity: maxSeverity,
-            confidence: sumConfidence,
+            confidence: averageConfidence,
             filename: primaryRecord.image_path || primaryRecord.ImagePath || `detection_${primaryRecord.DetectionID || primaryRecord.id}.jpg`,
             location: primaryRecord.Location || primaryRecord.location || 'Unknown',
             symptoms: allSymptoms,
@@ -381,7 +390,20 @@ const ReportsModule = () => {
           isMultiDisease: false
         };
       });
-      setReports(mapped);
+      // Sanitize mapped reports to ensure no function values are present
+      const sanitizeValue = (v) => {
+        if (typeof v === 'function') return String(v);
+        if (v && Array.isArray(v)) return v.map(sanitizeValue);
+        if (v && typeof v === 'object') {
+          const o = {};
+          Object.keys(v).forEach(k => { o[k] = sanitizeValue(v[k]); });
+          return o;
+        }
+        return v;
+      };
+
+      const sanitized = mapped.map(r => sanitizeValue(r));
+      setReports(sanitized);
       setLoading(false);
     } catch (error) {
       console.error('Error fetching reports:', error);
@@ -415,7 +437,9 @@ const ReportsModule = () => {
 
   const downloadReport = async (reportId, format = 'csv') => {
     try {
-      const response = await fetch(`/api/dashboard/reports/${reportId}/download?format=${format}`);
+      const response = await fetch(`${API_BASE}/api/dashboard/reports/${reportId}/download?format=${format}`, {
+        headers: getPitayaUserScopeHeaders(),
+      });
       
       if (response.ok) {
         const blob = await response.blob();
@@ -440,7 +464,9 @@ const ReportsModule = () => {
       setPreviewLoading(true);
       setPreviewFormat(format);
       
-      const response = await fetch(`/api/dashboard/reports/${reportId}/preview?format=${format}`);
+      const response = await fetch(`${API_BASE}/api/dashboard/reports/${reportId}/preview?format=${format}`, {
+        headers: getPitayaUserScopeHeaders(),
+      });
       const result = await response.json();
       
       if (result.success) {
@@ -458,8 +484,9 @@ const ReportsModule = () => {
 
   const deleteReport = async (reportId) => {
     try {
-      const response = await fetch(`/api/dashboard/detections/${reportId}`, {
-        method: 'DELETE'
+        const response = await fetch(`${API_BASE}/api/dashboard/detections/${reportId}`, {
+        method: 'DELETE',
+        headers: getPitayaUserScopeHeaders(),
       });
       if (response.ok) {
         setReports(reports.filter(report => report.id !== reportId));
@@ -675,10 +702,10 @@ const ReportsModule = () => {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
                       {report.filename && report.filename !== 'detection_image.jpg' ? (
                         <img 
-                          src={`http://localhost:5001/${report.filename.replace(/\\/g, '/')}`} 
+                          src={`${API_BASE}/api/uploads/${report.filename.replace(/\\/g, '/')}`} 
                           alt="Detection" 
                           className="w-12 h-12 object-cover rounded cursor-pointer hover:opacity-80"
-                          onClick={() => window.open(`http://localhost:5001/${report.filename.replace(/\\/g, '/')}`, '_blank')}
+                          onClick={() => window.open(`${API_BASE}/api/uploads/${report.filename.replace(/\\/g, '/')}`, '_blank')}
                         />
                       ) : (
                         <span className="text-gray-400">No image</span>
@@ -785,6 +812,21 @@ const ReportsModule = () => {
                   </svg>
                 </button>
               </div>
+
+              {/* Detection Image */}
+              {selectedReport.filename && selectedReport.filename !== 'detection_image.jpg' && (
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Detection Image</h3>
+                  <div className="bg-gray-50 dark:bg-gray-700 rounded-lg p-4">
+                    <img
+                      src={`${API_BASE}/api/uploads/${selectedReport.filename.replace(/\\/g, '/')}`}
+                      alt="Detection"
+                      className="w-full max-w-md mx-auto rounded-lg object-cover cursor-pointer hover:opacity-90"
+                      onClick={() => window.open(`${API_BASE}/api/uploads/${selectedReport.filename.replace(/\\/g, '/')}`, '_blank')}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Report Information */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
@@ -992,34 +1034,50 @@ const ReportsModule = () => {
 
       {/* ── Confirm Delete Dialog ──────────────────────────── */}
       {confirmDelete && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-[60]">
-          <div className="bg-white dark:bg-gray-800 rounded-xl max-w-md w-full shadow-2xl">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
             <div className="p-6">
-              <div className="flex items-center gap-4 mb-4">
-                <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center shrink-0">
-                  <Trash2 className="w-6 h-6 text-red-600 dark:text-red-400" />
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-red-100 to-red-200 dark:from-red-900/40 dark:to-red-800/30 flex items-center justify-center shrink-0 shadow-sm">
+                  <Trash2 className="w-7 h-7 text-red-600 dark:text-red-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100">Delete Report?</h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">This action cannot be undone.</p>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Delete Report</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">This action cannot be undone</p>
                 </div>
               </div>
-              <div className="bg-gray-50 dark:bg-gray-700 rounded-lg px-4 py-3 mb-6">
-                <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{confirmDelete.label}</p>
+
+              {/* Content Box */}
+              <div className="bg-gradient-to-r from-gray-50 to-gray-100 dark:from-gray-700/50 dark:to-gray-800/50 rounded-xl px-5 py-4 mb-6 border border-gray-200 dark:border-gray-700">
+                <div className="flex items-center gap-3">
+                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">{confirmDelete.label}</p>
+                </div>
               </div>
+
+              {/* Warning Message */}
+              <div className="flex items-start gap-3 mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  Deleting this report will permanently remove it from the database. Make sure you have a backup if needed.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
               <div className="flex gap-3">
                 <button
                   onClick={() => setConfirmDelete(null)}
-                  className="flex-1 px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors font-medium"
+                  className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all duration-200 font-semibold"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={confirmAndDelete}
-                  className="flex-1 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold transition-colors flex items-center justify-center gap-2"
+                  className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white font-semibold transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-red-500/25"
                 >
                   <Trash2 className="w-4 h-4" />
-                  Yes, Delete
+                  Delete
                 </button>
               </div>
             </div>

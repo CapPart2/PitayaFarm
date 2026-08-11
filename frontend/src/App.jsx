@@ -1,8 +1,16 @@
 import { motion } from 'framer-motion'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { adminAuthApi } from './api/adminApi'
 import AlertsModule from './components/AlertsModule'
 import Library from './components/Library'
+import AdminLayout from './layouts/AdminLayout'
 import AppLayout from './layouts/AppLayout'
+import AdminDashboard from './pages/AdminDashboard'
+import AdminLogs from './pages/AdminLogs'
+import AdminRecords from './pages/AdminRecords'
+import AdminReports from './pages/AdminReports'
+import AdminSettings from './pages/AdminSettings'
+import AdminUsers from './pages/AdminUsers'
 import Dashboard from './pages/Dashboard'
 import DetectionDetails from './pages/DetectionDetails'
 import DiseaseDetection from './pages/DiseaseDetection'
@@ -10,6 +18,7 @@ import GetStarted from './pages/GetStarted'
 import Landing from './pages/Landing'
 import Loading from './pages/Loading'
 import Login from './pages/Login'
+import Signup from './pages/Signup'
 import Profile from './pages/Profile'
 import Report from './pages/Report'
 import Reports from './pages/Reports'
@@ -30,7 +39,20 @@ function hasPitayaUser() {
     const raw = localStorage.getItem('pitayaUser')
     if (!raw) return false
     const parsed = JSON.parse(raw)
-    return Boolean(String(parsed?.firstName ?? '').trim()) && Boolean(String(parsed?.lastName ?? '').trim())
+    
+    // Check for admin user (has isAdmin flag and username)
+    if (parsed?.isAdmin === true && parsed?.Username) {
+      return true
+    }
+    
+    // Check for regular user.
+    // Accept users with single-word names (firstName only) and fallback identity fields.
+    const firstName = String(parsed?.firstName ?? '').trim()
+    const lastName = String(parsed?.lastName ?? '').trim()
+    const username = String(parsed?.Username ?? parsed?.username ?? '').trim()
+    const email = String(parsed?.Email ?? parsed?.email ?? '').trim()
+
+    return Boolean(firstName || lastName || username || email)
   } catch {
     return false
   }
@@ -46,6 +68,16 @@ function RequireUser({ children }) {
   return children
 }
 
+function RequireAdmin({ children }) {
+  const location = useLocation()
+
+  if (!adminAuthApi.isAuthenticated()) {
+    return <Navigate to="/login" replace state={{ from: location }} />
+  }
+
+  return children
+}
+
 function App() {
   return (
     <Routes>
@@ -53,6 +85,8 @@ function App() {
       <Route path="/landing" element={<Landing />} />
       <Route path="/get-started" element={<GetStarted />} />
       <Route path="/login" element={<Login />} />
+      <Route path="/signup" element={<Signup />} />
+      <Route path="/admin/login" element={<Navigate to="/login" replace />} />
 
       <Route
         path="/app"
@@ -75,6 +109,27 @@ function App() {
         <Route path="report" element={<Report />} />
         <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
       </Route>
+
+      {/* Admin Routes */}
+      <Route
+        path="/admin"
+        element={
+          <RequireAdmin>
+            <AdminLayout />
+          </RequireAdmin>
+        }
+      >
+        <Route index element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="dashboard" element={<AdminDashboard />} />
+        <Route path="library" element={<Library />} />
+        <Route path="users" element={<AdminUsers />} />
+        <Route path="logs" element={<AdminLogs />} />
+        <Route path="records" element={<AdminRecords />} />
+        <Route path="reports" element={<AdminReports />} />
+        <Route path="settings" element={<AdminSettings />} />
+        <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
+      </Route>
+
       <Route path="*" element={<Navigate to="/landing" replace />} />
     </Routes>
   )

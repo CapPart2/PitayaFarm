@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
+from functools import wraps
 from PIL import Image
 from io import BytesIO
 import tensorflow as tf
@@ -8,6 +9,11 @@ import os
 import logging
 import json
 import datetime
+import hashlib
+import secrets
+import smtplib
+import sqlite3
+from email.message import EmailMessage
 from disease_database import (
     get_disease_info,
     get_all_diseases,
@@ -19,13 +25,26 @@ from collections import defaultdict
 import csv
 import io as StringIO
 import requests
+from datetime import timedelta
+from werkzeug.utils import secure_filename
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
+CORS(
+    app,
+    origins="*",
+    allow_headers=[
+        "Content-Type",
+        "X-CSRFToken",
+        "X-Pitaya-User",
+        "x-pitaya-user",
+        "Authorization",
+    ],
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+)
 
 # Database manager for alerts and translations
 db_manager = DatabaseManager()
@@ -49,12 +68,113 @@ class_names = [
     "White Spot",
 ]
 
+# Upload configuration
+UPLOAD_FOLDER = "uploads"
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+
+def allowed_file(filename):
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def save_uploaded_file(file):
+    """Save uploaded file and return the filename"""
+    if file and allowed_file(file.filename):
+        # Generate unique filename
+        original_extension = file.filename.rsplit(".", 1)[1].lower()
+        unique_filename = f"{uuid.uuid4().hex}.{original_extension}"
+        filepath = os.path.join(UPLOAD_FOLDER, unique_filename)
+
+        # Save the file
+        file.save(filepath)
+        return unique_filename
+    return None
+
+
+def get_request_user_id(default=None):
+    user_id = request.headers.get("X-Pitaya-User") or request.form.get("user_id")
+    if user_id:
+        user_id = str(user_id).strip()
+        if user_id:
+            return user_id
+    if default is not None:
+        return default
+    # Keep user data isolated when scope header is missing.
+    return "__missing_user_scope__"
+
+
+def validate_dragonfruit_stem_image(image_path):
+    """Hard gate to reject non-stem uploads (e.g., paper/documents)."""
+    try:
+        image = Image.open(image_path).convert("RGB")
+        arr = np.array(image, dtype=np.uint8)
+
+        r = arr[:, :, 0].astype(np.int16)
+        g = arr[:, :, 1].astype(np.int16)
+        b = arr[:, :, 2].astype(np.int16)
+
+        max_rgb = np.maximum(np.maximum(r, g), b)
+        min_rgb = np.minimum(np.minimum(r, g), b)
+        chroma = max_rgb - min_rgb
+
+        mean_brightness = float(np.mean((r + g + b) / 3.0))
+        mean_chroma = float(np.mean(chroma))
+
+        # Paper/doc-like areas are usually bright and near-neutral.
+        paper_like = (mean_brightness >= 160) & (chroma <= 20)
+        paper_ratio = float(np.mean(paper_like))
+
+        # Stem-like colors: green and brown regions.
+        green_mask = (g >= r + 14) & (g >= b + 14) & (g >= 50)
+        brown_mask = (r >= 72) & (g >= 40) & (b <= 125) & ((r - g) >= 8)
+        plant_mask = green_mask | brown_mask
+        green_ratio = float(np.mean(green_mask))
+        brown_ratio = float(np.mean(brown_mask))
+        plant_ratio = float(np.mean(plant_mask))
+
+        gray = (0.299 * r + 0.587 * g + 0.114 * b).astype(np.float32)
+        gray_std = float(np.std(gray))
+
+        # Simple edge-energy proxy to avoid flat paper surfaces.
+        gx = np.abs(np.diff(gray, axis=1))
+        gy = np.abs(np.diff(gray, axis=0))
+        edge_energy = float(np.mean(gx) + np.mean(gy))
+
+        document_like = (
+            (paper_ratio >= 0.62 and plant_ratio <= 0.10)
+            or (paper_ratio >= 0.52 and mean_chroma <= 18)
+            or (paper_ratio >= 0.45 and plant_ratio <= 0.05 and edge_energy <= 12)
+        )
+
+        valid = (
+            (plant_ratio >= 0.07)
+            and (paper_ratio <= 0.78)
+            and (gray_std >= 16 or edge_energy >= 12)
+            and (not document_like)
+        )
+
+        return {
+            "valid": bool(valid),
+            "document_like": bool(document_like),
+            "plant_ratio": plant_ratio,
+            "paper_ratio": paper_ratio,
+            "green_ratio": green_ratio,
+            "brown_ratio": brown_ratio,
+            "mean_brightness": mean_brightness,
+            "mean_chroma": mean_chroma,
+            "gray_std": gray_std,
+            "edge_energy": edge_energy,
+        }
+    except Exception as e:
+        logger.error(f"Stem subject validation error: {str(e)}")
+        return {"valid": False, "document_like": True, "error": str(e)}
+
+
 # Model paths (try both .keras and .h5)
 model_paths = [
     "leaf_disease_model.keras",  # Main model from Disease.ipynb
-    "leaf_disease_model_702.keras",  # Student ID specific model from Disease.ipynb
-    "leaf_disease_model_0.keras",
-    "leaf_disease_model_0.h5",
 ]
 
 # Load model once at startup
@@ -139,6 +259,7 @@ simple_predict = create_improved_predict_function()
 def predict():
     """Simple and accurate disease detection"""
     try:
+        user_id = get_request_user_id()
         if "file" not in request.files:
             return jsonify({"error": "No file part"}), 400
 
@@ -157,26 +278,69 @@ def predict():
                 400,
             )
 
-        # Use simple accurate detection
-        result = simple_predict(file)
+        # Save uploaded file and get filename
+        saved_filename = save_uploaded_file(file)
+        if not saved_filename:
+            return jsonify({"error": "Failed to save uploaded file"}), 400
 
-        logger.info(f"🔍 Prediction result: {result.get('success', False)}")
+        saved_file_path = os.path.join(UPLOAD_FOLDER, saved_filename)
+
+        # Hard reject obvious non-stem uploads before running the model.
+        subject_check = validate_dragonfruit_stem_image(saved_file_path)
+        if not subject_check.get("valid", False):
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Invalid image subject. Please capture dragon fruit stem only.",
+                        "reason": "invalid_subject",
+                        "subject_validation": subject_check,
+                    }
+                ),
+                400,
+            )
+
+        # Use simple accurate detection
+        with open(saved_file_path, "rb") as image_file:
+            result = simple_predict(image_file)
+
+        logger.info(f"Prediction result: {result.get('success', False)}")
 
         if result["success"]:
             detection = result["detection"]
             prediction_details = result.get("prediction_details", {})
 
+            if detection and detection.get("reason") == "invalid_subject":
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": detection.get(
+                                "message",
+                                "Invalid image subject. Please capture dragon fruit stem only.",
+                            ),
+                            "detection": detection,
+                            "prediction_details": prediction_details,
+                        }
+                    ),
+                    400,
+                )
+
             # Check if multiple diseases were detected
             detected_diseases = prediction_details.get("detected_diseases", [])
-            logger.info(f"🎯 Detected diseases count: {len(detected_diseases)}")
+            logger.info(f"Detected diseases count: {len(detected_diseases)}")
             if detected_diseases:
                 logger.info(
-                    f"📋 Detected diseases: {[d['disease_name'] for d in detected_diseases]}"
+                    f"Detected diseases: {[d['disease_name'] for d in detected_diseases]}"
                 )
 
             if detected_diseases and len(detected_diseases) > 1:
                 # Multiple diseases detected - get info for all
                 diseases_info = []
+                session_id = (
+                    uuid.uuid4().hex
+                )  # Generate session ID for multi-disease detection
+
                 for disease_data in detected_diseases:
                     disease_info = get_disease_info(disease_data["disease_name"])
                     diseases_info.append(
@@ -197,6 +361,21 @@ def predict():
                             ),
                             "message": f"{disease_data['disease_name']} detected with {disease_data['confidence']:.1%} confidence",
                         }
+                    )
+
+                    # Save each disease detection to database with image path
+                    db_manager.add_disease_detection(
+                        disease_type=disease_data["disease_name"],
+                        severity=disease_data["severity"],
+                        confidence=disease_data["confidence"] * 100,
+                        image_path=saved_filename,
+                        session_id=session_id,
+                        user_id=user_id,
+                        additional_diseases=(
+                            detected_diseases[1:]
+                            if disease_data == detected_diseases[0]
+                            else None
+                        ),
                     )
 
                 # Create alert for primary disease
@@ -231,6 +410,15 @@ def predict():
             elif detection["disease_name"]:
                 # Single disease detected - maintain backward compatibility
                 disease_info = get_disease_info(detection["disease_name"])
+
+                # Save detection to database with image path
+                db_manager.add_disease_detection(
+                    disease_type=detection["disease_name"],
+                    severity=detection["severity"],
+                    confidence=detection["confidence_level"],
+                    image_path=saved_filename,
+                    user_id=user_id,
+                )
 
                 # Create alert
                 alert = {
@@ -287,8 +475,18 @@ def predict():
             return jsonify(result), 400
 
     except Exception as e:
-        logger.error(f"❌ Prediction error: {str(e)}")
+        logger.error(f"Prediction error: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/uploads/<path:filename>")
+def serve_uploaded_file(filename):
+    """Serve files from the uploads directory"""
+    try:
+        return send_from_directory(UPLOAD_FOLDER, filename)
+    except Exception as e:
+        logger.error(f"Error serving file {filename}: {str(e)}")
+        return jsonify({"error": "File not found"}), 404
 
 
 @app.errorhandler(404)
@@ -380,6 +578,19 @@ def check_translation(disease_id):
 @app.route("/api/translate/save", methods=["POST"])
 def save_translation():
     try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return (
+                jsonify(
+                    {"success": False, "error": "Unauthorized - Admin token required"}
+                ),
+                401,
+            )
+
+        token = auth_header.split(" ")[1]
+        if token != os.environ.get("ADMIN_TOKEN", "admin-secret-token-12345"):
+            return jsonify({"success": False, "error": "Invalid admin token"}), 403
+
         data = request.get_json()
 
         required_fields = [
@@ -428,6 +639,19 @@ def save_translation():
 def batch_translate():
     """Batch translate multiple diseases - Generate Once Store Forever"""
     try:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return (
+                jsonify(
+                    {"success": False, "error": "Unauthorized - Admin token required"}
+                ),
+                401,
+            )
+
+        token = auth_header.split(" ")[1]
+        if token != os.environ.get("ADMIN_TOKEN", "admin-secret-token-12345"):
+            return jsonify({"success": False, "error": "Invalid admin token"}), 403
+
         data = request.get_json()
 
         if "diseases" not in data:
@@ -603,6 +827,990 @@ def get_library():
         return jsonify({"error": str(e)}), 500
 
 
+# ===== ADMIN AUTHENTICATION MIDDLEWARE =====
+
+
+def admin_required(f):
+    """Decorator to require admin authentication"""
+
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        # Check for admin token in headers
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            return jsonify({"error": "Unauthorized - Admin token required"}), 401
+
+        token = auth_header.split(" ")[1]
+
+        # Simple token validation (in production, use JWT or proper session management)
+        # For now, we'll use a simple token stored in session or environment
+        if token != os.environ.get("ADMIN_TOKEN", "admin-secret-token-12345"):
+            return jsonify({"error": "Invalid admin token"}), 403
+
+        return f(*args, **kwargs)
+
+    return decorated_function
+
+
+def get_client_ip():
+    """Get client IP address"""
+    if request.headers.getlist("X-Forwarded-For"):
+        return request.headers.getlist("X-Forwarded-For")[0]
+    return request.remote_addr
+
+
+def init_login_verification_table():
+    """Create table for short-lived login verification codes."""
+    conn = sqlite3.connect(db_manager.db_path)
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS login_verification_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            challenge_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts INTEGER DEFAULT 0,
+            used INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+    conn.commit()
+    conn.close()
+
+
+def mask_email(email: str) -> str:
+    """Return a masked email for API responses."""
+    if not email or "@" not in email:
+        return ""
+    local, domain = email.split("@", 1)
+    if len(local) <= 2:
+        masked_local = local[:1] + "*"
+    else:
+        masked_local = local[:2] + "*" * max(1, len(local) - 2)
+    return f"{masked_local}@{domain}"
+
+
+def send_login_verification_email(recipient_email: str, code: str) -> None:
+    """Send a one-time login verification code to the user's email."""
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME", "jacofarm1@gmail.com")
+    smtp_password = os.getenv("SMTP_PASSWORD", "daml mkle iehe ybny")
+
+    message = EmailMessage()
+    message["Subject"] = "PITAYA Login Verification Code"
+    message["From"] = f"PITAYA Application <{smtp_username}>"
+    message["To"] = recipient_email
+    message.set_content(
+        (
+            "Your PITAYA login verification code is: "
+            f"{code}\n\n"
+            "This code expires in 10 minutes. If you did not request this login, ignore this email."
+        )
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
+        smtp.starttls()
+        smtp.login(smtp_username, smtp_password)
+        smtp.send_message(message)
+
+
+def create_login_verification_challenge(user: dict) -> dict:
+    """Create and persist a short-lived verification challenge for login."""
+    user_id = int(user.get("UserID"))
+    email = str((user.get("Email") or "").strip())
+    if not email:
+        raise ValueError("No email is set for this account")
+
+    raw_code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+    challenge_id = uuid.uuid4().hex
+    expires_at = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
+
+    conn = sqlite3.connect(db_manager.db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE login_verification_codes SET used = 1 WHERE user_id = ? AND used = 0",
+        (user_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO login_verification_codes (challenge_id, user_id, email, code_hash, expires_at, attempts, used)
+        VALUES (?, ?, ?, ?, ?, 0, 0)
+        """,
+        (challenge_id, user_id, email, code_hash, expires_at),
+    )
+    conn.commit()
+    conn.close()
+
+    send_login_verification_email(email, raw_code)
+
+    return {
+        "challenge_id": challenge_id,
+        "email": email,
+        "expires_in_seconds": 600,
+    }
+
+
+def build_login_success_payload(user: dict) -> dict:
+    """Build the response payload returned after successful authentication."""
+    is_admin = str(user.get("Role") or "").lower() == "admin"
+    payload = {
+        "success": True,
+        "user": {
+            "UserID": user.get("UserID"),
+            "Username": user.get("Username"),
+            "Email": user.get("Email"),
+            "FirstName": user.get("FirstName"),
+            "LastName": user.get("LastName"),
+            "Role": user.get("Role"),
+            "Status": user.get("Status"),
+        },
+    }
+    if is_admin:
+        payload["adminToken"] = os.environ.get(
+            "ADMIN_TOKEN", "admin-secret-token-12345"
+        )
+    return payload
+
+
+# ===== ADMIN API ENDPOINTS =====
+
+
+@app.route("/api/admin/login", methods=["POST"])
+def admin_login():
+    """Admin login endpoint - redirects to main login with admin role handling"""
+    try:
+        data = request.get_json()
+        username = data.get("username")
+        password = data.get("password")
+
+        if not username or not password:
+            return jsonify({"error": "Username and password required"}), 400
+
+        # Verify credentials using database manager
+        user = db_manager.verify_user_credentials(username, password)
+
+        if not user:
+            return jsonify({"error": "Invalid credentials"}), 401
+
+        if user.get("Role") != "admin":
+            return jsonify({"error": "Access denied - Admin only"}), 403
+
+        # Log the login
+        db_manager.create_user_log(
+            user_id=user.get("UserID"),
+            action="LOGIN",
+            description=f"Admin {username} logged in",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        # Return admin token for compatibility with frontend
+        admin_token = os.environ.get("ADMIN_TOKEN", "admin-secret-token-12345")
+        return jsonify({"success": True, "user": user, "adminToken": admin_token}), 200
+
+    except Exception as e:
+        logger.error(f"Admin login error: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+# ===== PUBLIC AUTH API =====
+@app.route("/api/auth/register", methods=["POST"])
+def api_register():
+    try:
+        data = request.get_json() or {}
+        email = (data.get("email") or "").strip()
+        username = (data.get("username") or "").strip()
+        password = data.get("password") or ""
+        name = (data.get("name") or "").strip()
+
+        if not email or not username or not password or not name:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "All fields are required (email, name, username, password)",
+                    }
+                ),
+                400,
+            )
+
+        # Basic email validation
+        import re
+
+        email_re = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+        if not email_re.match(email):
+            return jsonify({"success": False, "error": "Invalid email format"}), 400
+
+        if len(password) > 8:
+            return (
+                jsonify(
+                    {"success": False, "error": "Password must not exceed 8 characters"}
+                ),
+                400,
+            )
+
+        # Prevent duplicate username/email
+        conn = __import__("sqlite3").connect(db_manager.db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM users WHERE Username = ?", (username,))
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return jsonify({"success": False, "error": "Username already exists"}), 400
+        cur.execute("SELECT COUNT(*) FROM users WHERE Email = ?", (email,))
+        if cur.fetchone()[0] > 0:
+            conn.close()
+            return jsonify({"success": False, "error": "Email already registered"}), 400
+
+        # Split name
+        parts = name.split(None, 1)
+        first_name = parts[0]
+        last_name = parts[1] if len(parts) > 1 else ""
+
+        # Create user as a regular 'user' with status 'pending'
+        user_id = db_manager.create_user(
+            username=username,
+            password=password,
+            email=email,
+            first_name=first_name,
+            last_name=last_name,
+            role="user",
+            status="pending",
+        )
+
+        # Log user creation
+        db_manager.create_user_log(
+            user_id=user_id,
+            action="REGISTER",
+            description=f"New user registration: {username}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        conn.close()
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "message": "Account created successfully! Please wait for the admin to verify your account before you can log in.",
+                }
+            ),
+            201,
+        )
+    except Exception as e:
+        logger.error(f"Register error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/auth/login", methods=["POST"])
+def api_login():
+    try:
+        data = request.get_json() or {}
+        logger.info(f"Login request payload: {data}")
+        logger.info(f"Client IP: {get_client_ip()}")
+        # accept either username or email for login
+        identifier = (data.get("username") or data.get("email") or "").strip()
+        password = data.get("password") or ""
+
+        if not identifier or not password:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Email/username and password are required",
+                    }
+                ),
+                400,
+            )
+
+        # Lookup user by username first, then by email
+        user = None
+        if identifier:
+            user = db_manager.get_user_by_username(identifier)
+            if not user:
+                user = db_manager.get_user_by_email(identifier)
+        if not user:
+            return (
+                jsonify(
+                    {"success": False, "error": "Invalid email/username or password"}
+                ),
+                401,
+            )
+
+        pw_hash = hashlib.sha256(password.encode()).hexdigest()
+        if pw_hash != user.get("PasswordHash"):
+            return (
+                jsonify(
+                    {"success": False, "error": "Invalid email/username or password"}
+                ),
+                401,
+            )
+
+        status = (user.get("Status") or "").lower()
+        if status == "pending":
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Your account is still waiting for admin verification.",
+                    }
+                ),
+                403,
+            )
+        if status == "rejected":
+            return (
+                jsonify({"success": False, "error": "Your account has been rejected."}),
+                403,
+            )
+        if status not in ("active", "verified"):
+            # Treat unknown statuses as inactive
+            return jsonify({"success": False, "error": "Account is not active"}), 403
+
+        # Check if user is admin - skip email verification for admins
+        user_role = (user.get("Role") or "").lower()
+        is_admin = user_role == "admin"
+
+        if is_admin:
+            # Admin login without email verification
+            logger.info(
+                f"Admin user {user.get('Username')} logging in without email verification"
+            )
+            db_manager.create_user_log(
+                user_id=user.get("UserID"),
+                action="LOGIN",
+                description=f"Admin {user.get('Username')} logged in",
+                ip_address=get_client_ip(),
+                user_agent=request.headers.get("User-Agent"),
+            )
+            return jsonify(build_login_success_payload(user)), 200
+
+        # Regular users require email verification code before final sign-in.
+        try:
+            challenge = create_login_verification_challenge(user)
+        except Exception as email_exc:
+            logger.exception("Failed to create login verification challenge")
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": f"Unable to send verification code: {email_exc}",
+                    }
+                ),
+                500,
+            )
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "requires_verification": True,
+                    "message": "Verification code sent to your email.",
+                    "verification": {
+                        "challenge_id": challenge["challenge_id"],
+                        "masked_email": mask_email(challenge["email"]),
+                        "expires_in_seconds": challenge["expires_in_seconds"],
+                    },
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        logger.exception("Login error")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+@app.route("/api/auth/verify-login-code", methods=["POST"])
+def api_verify_login_code():
+    """Verify one-time code and complete login."""
+    try:
+        init_login_verification_table()
+        data = request.get_json() or {}
+        challenge_id = str(data.get("challenge_id") or "").strip()
+        code = str(data.get("code") or "").strip()
+
+        if not challenge_id or not code:
+            return (
+                jsonify(
+                    {"success": False, "error": "challenge_id and code are required"}
+                ),
+                400,
+            )
+
+        # Check if this is an admin user trying to bypass verification
+        # Get the user from the challenge first
+        conn = sqlite3.connect(db_manager.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT user_id FROM login_verification_codes
+            WHERE challenge_id = ?
+            """,
+            (challenge_id,),
+        )
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return (
+                jsonify(
+                    {"success": False, "error": "Verification challenge not found"}
+                ),
+                404,
+            )
+
+        user = db_manager.get_user_by_id(int(row["user_id"]))
+        if not user:
+            return jsonify({"success": False, "error": "User not found"}), 404
+
+        # If user is admin, allow login without code verification
+        if (user.get("Role") or "").lower() == "admin":
+            logger.info(
+                f"Admin user {user.get('Username')} bypassing email verification"
+            )
+            # Mark the challenge as used
+            conn = sqlite3.connect(db_manager.db_path)
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE login_verification_codes SET used = 1 WHERE challenge_id = ?",
+                (challenge_id,),
+            )
+            conn.commit()
+            conn.close()
+
+            db_manager.create_user_log(
+                user_id=user.get("UserID"),
+                action="LOGIN",
+                description=f"Admin {user.get('Username')} logged in",
+                ip_address=get_client_ip(),
+                user_agent=request.headers.get("User-Agent"),
+            )
+            return jsonify(build_login_success_payload(user)), 200
+
+        # Regular users must provide valid code
+        if not code.isdigit() or len(code) != 6:
+            return jsonify({"success": False, "error": "Invalid code format"}), 400
+
+        conn = sqlite3.connect(db_manager.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, code_hash, expires_at, attempts, used
+            FROM login_verification_codes
+            WHERE challenge_id = ?
+            """,
+            (challenge_id,),
+        )
+        row = cur.fetchone()
+
+        if not row:
+            conn.close()
+            return (
+                jsonify(
+                    {"success": False, "error": "Verification challenge not found"}
+                ),
+                404,
+            )
+        if int(row["used"]) == 1:
+            conn.close()
+            return (
+                jsonify({"success": False, "error": "Verification code already used"}),
+                400,
+            )
+        if int(row["attempts"]) >= 5:
+            conn.close()
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Too many attempts. Please login again.",
+                    }
+                ),
+                429,
+            )
+
+        expires_at = datetime.datetime.fromisoformat(str(row["expires_at"]))
+        if datetime.datetime.now() > expires_at:
+            cur.execute(
+                "UPDATE login_verification_codes SET used = 1 WHERE id = ?",
+                (row["id"],),
+            )
+            conn.commit()
+            conn.close()
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Verification code expired. Please login again.",
+                    }
+                ),
+                400,
+            )
+
+        code_hash = hashlib.sha256(code.encode("utf-8")).hexdigest()
+        if code_hash != row["code_hash"]:
+            cur.execute(
+                "UPDATE login_verification_codes SET attempts = attempts + 1 WHERE id = ?",
+                (row["id"],),
+            )
+            conn.commit()
+            conn.close()
+            return (
+                jsonify({"success": False, "error": "Invalid verification code"}),
+                401,
+            )
+
+        cur.execute(
+            "UPDATE login_verification_codes SET used = 1 WHERE id = ?", (row["id"],)
+        )
+        conn.commit()
+        conn.close()
+
+        user = db_manager.get_user_by_id(int(row["user_id"]))
+        if not user:
+            return jsonify({"success": False, "error": "User not found"}), 404
+
+        db_manager.update_user(user_id=user.get("UserID"), password=None, status=None)
+        db_manager.create_user_log(
+            user_id=user.get("UserID"),
+            action="LOGIN",
+            description=f"User {user.get('Username')} logged in (email verified)",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return jsonify(build_login_success_payload(user)), 200
+    except Exception:
+        logger.exception("Verify login code error")
+        return jsonify({"success": False, "error": "Internal server error"}), 500
+
+
+# Serve auth static pages (optional simple flow)
+@app.route("/auth/login", methods=["GET"])
+def serve_login_page():
+    try:
+        return send_file("auth/login.html")
+    except Exception:
+        return jsonify({"error": "Login page not found"}), 404
+
+
+@app.route("/auth/register", methods=["GET"])
+def serve_register_page():
+    try:
+        return send_file("auth/register.html")
+    except Exception:
+        return jsonify({"error": "Register page not found"}), 404
+
+
+@app.route("/api/user/preferences", methods=["GET", "POST"])
+def user_preferences():
+    """Get or update profile and notification preferences."""
+    try:
+        user_id = get_request_user_id()
+
+        if request.method == "GET":
+            prefs = db_manager.get_user_preferences(user_id)
+
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "data": {
+                            "user_id": user_id,
+                            "preferred_language": prefs.get("preferred_language", "en"),
+                            "notification_email": prefs.get("notification_email"),
+                            "farm_name": prefs.get("farm_name"),
+                            "email_notifications_enabled": prefs.get(
+                                "email_notifications_enabled", True
+                            ),
+                        },
+                        "timestamp": datetime.datetime.now().isoformat(),
+                    }
+                ),
+                200,
+            )
+
+        elif request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            preferred_language = data.get("preferred_language", "en")
+            notification_email = (data.get("notification_email") or "").strip() or None
+            farm_name = (data.get("farm_name") or "").strip() or None
+            email_notifications_enabled = data.get("email_notifications_enabled", True)
+
+            if notification_email:
+                import re
+
+                email_regex = r"^[^\s@]+@[^\s@]+\.[^\s@]+$"
+                if not re.match(email_regex, notification_email):
+                    return (
+                        jsonify(
+                            {
+                                "success": False,
+                                "error": "Please enter a valid email address",
+                            }
+                        ),
+                        400,
+                    )
+
+            db_manager.save_user_preferences(
+                user_id=user_id,
+                preferred_language=preferred_language,
+                notification_email=notification_email,
+                farm_name=farm_name,
+                email_notifications_enabled=1 if email_notifications_enabled else 0,
+            )
+
+            return (
+                jsonify(
+                    {
+                        "success": True,
+                        "data": {
+                            "user_id": user_id,
+                            "preferred_language": preferred_language,
+                            "notification_email": notification_email,
+                            "farm_name": farm_name,
+                            "email_notifications_enabled": bool(
+                                email_notifications_enabled
+                            ),
+                        },
+                        "message": "Profile preferences updated",
+                        "timestamp": datetime.datetime.now().isoformat(),
+                    }
+                ),
+                200,
+            )
+
+        return jsonify({"success": False, "error": "Method not allowed"}), 405
+
+    except Exception as e:
+        logger.exception("Preferences error")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/dashboard/metrics", methods=["GET"])
+@admin_required
+def get_admin_dashboard_metrics():
+    """Get admin dashboard metrics"""
+    try:
+        metrics = db_manager.get_admin_dashboard_metrics()
+        return jsonify({"success": True, "data": metrics}), 200
+    except Exception as e:
+        logger.error(f"Admin dashboard metrics error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===== ADMIN: USER MANAGEMENT ENDPOINTS =====
+
+
+@app.route("/api/admin/users", methods=["GET"])
+@admin_required
+def get_all_users():
+    """Get all users"""
+    try:
+        users = db_manager.get_all_users()
+        return jsonify({"success": True, "data": users}), 200
+    except Exception as e:
+        logger.error(f"Get users error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/users/<int:user_id>", methods=["GET"])
+@admin_required
+def get_user(user_id):
+    """Get user by ID"""
+    try:
+        user = db_manager.get_user_by_id(user_id)
+        if not user:
+            return jsonify({"success": False, "error": "User not found"}), 404
+        return jsonify({"success": True, "data": user}), 200
+    except Exception as e:
+        logger.error(f"Get user error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/users", methods=["POST"])
+@admin_required
+def create_user():
+    """Create a new user"""
+    try:
+        data = request.get_json()
+
+        required_fields = ["username", "password"]
+        for field in required_fields:
+            if field not in data:
+                return (
+                    jsonify({"success": False, "error": f"Missing field: {field}"}),
+                    400,
+                )
+
+        user_id = db_manager.create_user(
+            username=data["username"],
+            password=data["password"],
+            email=data.get("email"),
+            first_name=data.get("first_name"),
+            last_name=data.get("last_name"),
+            role=data.get("role", "user"),
+            status=data.get("status", "active"),
+        )
+
+        # Log the action
+        db_manager.create_user_log(
+            user_id=None,  # Admin user ID would be from token in production
+            action="CREATE_USER",
+            description=f"Created user {data['username']}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return jsonify({"success": True, "data": {"user_id": user_id}}), 201
+    except Exception as e:
+        logger.error(f"Create user error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/users/<int:user_id>", methods=["PUT"])
+@admin_required
+def update_user(user_id):
+    """Update user"""
+    try:
+        data = request.get_json()
+
+        success = db_manager.update_user(
+            user_id=user_id,
+            email=data.get("email"),
+            first_name=data.get("first_name"),
+            last_name=data.get("last_name"),
+            role=data.get("role"),
+            status=data.get("status"),
+            password=data.get("password"),
+        )
+
+        if not success:
+            return (
+                jsonify(
+                    {"success": False, "error": "User not found or no changes made"}
+                ),
+                404,
+            )
+
+        # Log the action
+        db_manager.create_user_log(
+            user_id=None,
+            action="UPDATE_USER",
+            description=f"Updated user {user_id}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return jsonify({"success": True, "message": "User updated successfully"}), 200
+    except Exception as e:
+        logger.error(f"Update user error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/users/<int:user_id>", methods=["DELETE"])
+@admin_required
+def delete_user(user_id):
+    """Delete user"""
+    try:
+        success = db_manager.delete_user(user_id)
+
+        if not success:
+            return jsonify({"success": False, "error": "User not found"}), 404
+
+        # Log the action
+        db_manager.create_user_log(
+            user_id=None,
+            action="DELETE_USER",
+            description=f"Deleted user {user_id}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return jsonify({"success": True, "message": "User deleted successfully"}), 200
+    except Exception as e:
+        logger.error(f"Delete user error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===== ADMIN: USER LOGS ENDPOINTS =====
+
+
+@app.route("/api/admin/logs", methods=["GET"])
+@admin_required
+def get_user_logs():
+    """Get user logs with optional filters"""
+    try:
+        start_date = request.args.get("start_date")
+        end_date = request.args.get("end_date")
+        user_id = request.args.get("user_id")
+        action = request.args.get("action")
+        limit = int(request.args.get("limit", 100))
+
+        logs = db_manager.get_all_user_logs(
+            start_date=start_date,
+            end_date=end_date,
+            user_id=int(user_id) if user_id else None,
+            action=action,
+            limit=limit,
+        )
+
+        return jsonify({"success": True, "data": logs}), 200
+    except Exception as e:
+        logger.error(f"Get user logs error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===== ADMIN: SITE SETTINGS ENDPOINTS =====
+
+
+@app.route("/api/admin/settings", methods=["GET"])
+@admin_required
+def get_site_settings():
+    """Get site settings"""
+    try:
+        category = request.args.get("category")
+        settings = db_manager.get_site_settings(category=category)
+        return jsonify({"success": True, "data": settings}), 200
+    except Exception as e:
+        logger.error(f"Get site settings error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/settings/<setting_key>", methods=["PUT"])
+@admin_required
+def update_site_setting(setting_key):
+    """Update site setting"""
+    try:
+        data = request.get_json()
+        setting_value = data.get("value")
+
+        if not setting_value:
+            return jsonify({"success": False, "error": "Value is required"}), 400
+
+        success = db_manager.update_site_setting(setting_key, setting_value)
+
+        if not success:
+            return jsonify({"success": False, "error": "Setting not found"}), 404
+
+        # Log the action
+        db_manager.create_user_log(
+            user_id=None,
+            action="UPDATE_SETTING",
+            description=f"Updated setting {setting_key}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return (
+            jsonify({"success": True, "message": "Setting updated successfully"}),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Update site setting error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===== ADMIN: DISEASE DETECTIONS MANAGEMENT =====
+
+
+@app.route("/api/admin/detections", methods=["GET"])
+@admin_required
+def get_all_detections_admin():
+    """Get all disease detections (admin view)"""
+    try:
+        start_date = request.args.get("start_date")
+        end_date = request.args.get("end_date")
+
+        detections = db_manager.get_all_disease_detections(
+            start_date=start_date, end_date=end_date
+        )
+
+        return jsonify({"success": True, "data": detections}), 200
+    except Exception as e:
+        logger.error(f"Get detections admin error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/detections/<int:detection_id>", methods=["DELETE"])
+@admin_required
+def delete_detection_admin(detection_id):
+    """Delete disease detection (admin)"""
+    try:
+        success = db_manager.delete_detection(detection_id)
+
+        if not success:
+            return jsonify({"success": False, "error": "Detection not found"}), 404
+
+        # Log the action
+        db_manager.create_user_log(
+            user_id=None,
+            action="DELETE_DETECTION",
+            description=f"Deleted detection {detection_id}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return (
+            jsonify({"success": True, "message": "Detection deleted successfully"}),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Delete detection admin error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+# ===== ADMIN: YIELD PREDICTIONS MANAGEMENT =====
+
+
+@app.route("/api/admin/yield-predictions", methods=["GET"])
+@admin_required
+def get_all_yield_predictions_admin():
+    """Get all yield predictions (admin view)"""
+    try:
+        predictions = db_manager.get_all_yield_predictions()
+        return jsonify({"success": True, "data": predictions}), 200
+    except Exception as e:
+        logger.error(f"Get yield predictions admin error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/yield-predictions/<int:prediction_id>", methods=["DELETE"])
+@admin_required
+def delete_yield_prediction_admin(prediction_id):
+    """Delete yield prediction (admin)"""
+    try:
+        success = db_manager.delete_yield_prediction(prediction_id)
+
+        if not success:
+            return jsonify({"success": False, "error": "Prediction not found"}), 404
+
+        # Log the action
+        db_manager.create_user_log(
+            user_id=None,
+            action="DELETE_YIELD_PREDICTION",
+            description=f"Deleted yield prediction {prediction_id}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+
+        return (
+            jsonify(
+                {"success": True, "message": "Yield prediction deleted successfully"}
+            ),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Delete yield prediction admin error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 # ===== UTILITY FUNCTIONS =====
 def load_image(img):
     """
@@ -717,9 +1925,9 @@ if __name__ == "__main__":
     try:
         # Pre-load model on startup
         init_model()
-        print("🚀 Flask API starting...")
-        print("📍 Health: http://localhost:5000/health")
-        print("📍 Predict: http://localhost:5000/predict (POST)")
+        print("Flask API starting...")
+        print("Health: http://localhost:5000/health")
+        print("Predict: http://localhost:5000/predict (POST)")
         app.run(host="0.0.0.0", port=5000, debug=False)
     except Exception as e:
         logger.error(f"Failed to start API: {str(e)}")

@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { getPitayaUserScopeHeaders } from '../api/userScope'
 import { predictionApi } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
 import SeverityBadge from '../components/SeverityBadge'
@@ -68,6 +69,9 @@ export default function DiseaseDetection() {
       
       // Use the prediction API
       const response = await predictionApi.predictDisease(file)
+
+      // Predict endpoint already persists detections; broadcast refresh for Reports/Dashboard modules.
+      window.dispatchEvent(new Event('pitaya:refresh'))
       
       // Handle enhanced response from new API
       if (response.detection) {
@@ -101,8 +105,7 @@ export default function DiseaseDetection() {
             })
           }
           
-          // DO NOT trigger real-time updates yet - wait for confirmation
-          console.log('� Detection result ready, waiting for user confirmation')
+          console.log('Detection result ready')
         } else {
           // No disease detected
           setResult({
@@ -118,16 +121,14 @@ export default function DiseaseDetection() {
             reportId: null
           })
           
-          // DO NOT trigger real-time updates yet - wait for confirmation
-          console.log('� Healthy plant detected, waiting for user confirmation')
+          console.log('Healthy plant detected')
         }
       } else {
         // Fallback to old response format
         const mappedResult = predictionApi.mapPredictResponse(response)
         setResult(mappedResult)
         
-        // DO NOT trigger real-time updates yet - wait for confirmation
-        console.log('� Detection result ready (fallback), waiting for user confirmation')
+        console.log('Detection result ready (fallback)')
       }
     } catch (err) {
       console.error('Prediction error:', err)
@@ -183,6 +184,7 @@ export default function DiseaseDetection() {
           
           return fetch(`http://192.168.1.59:5001/api/dashboard/disease-detection`, {
             method: 'POST',
+            headers: getPitayaUserScopeHeaders(),
             body: formData
           })
         })
@@ -219,6 +221,7 @@ export default function DiseaseDetection() {
         
         const response = await fetch(`http://192.168.1.59:5001/api/dashboard/disease-detection`, {
           method: 'POST',
+          headers: getPitayaUserScopeHeaders(),
           body: formData
         })
         

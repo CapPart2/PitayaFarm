@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { AlertCircle, Bell, Camera, CheckCircle, Settings, User } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { getPitayaCurrentUser, getPitayaUserScopeHeaders, getScopedStorageKey } from '../api/userScope'
 
 function getPitayaUser() {
   try {
@@ -21,14 +22,18 @@ function buildFullName(firstName, lastName) {
 }
 
 const DEFAULT_PROFILE = {
-  fullName: 'John Farmer',
-  email: 'robabarintos@gmail.com',
-  farmName: 'Green Valley Dragon Fruit Farm',
-  location: 'Davao City, Philippines',
-  bio: 'Dragon fruit farmer with 5+ years of experience in sustainable agriculture practices.',
+  fullName: '',
+  email: '',
+  farmName: '',
+  location: '',
+  bio: '',
 }
 
 export default function Profile() {
+  const currentUser = getPitayaCurrentUser()
+  const scopedProfileKey = getScopedStorageKey('userProfile', currentUser)
+  const scopedPictureKey = getScopedStorageKey('profilePicture', currentUser)
+  const scopedNotificationsKey = getScopedStorageKey('userNotifications', currentUser)
   const [activeTab, setActiveTab] = useState('profile')
   const [profilePicture, setProfilePicture] = useState(null)
   const [saveStatus, setSaveStatus] = useState({ type: '', message: '' })
@@ -50,12 +55,16 @@ export default function Profile() {
   useEffect(() => {
     const loadProfileSettings = async () => {
       try {
-        const response = await fetch('/api/user/preferences')
+        const response = await fetch('/api/user/preferences', {
+          headers: {
+            ...getPitayaUserScopeHeaders(),
+          },
+        })
         const data = await response.json()
         if (data?.success) {
           setFormData((prev) => ({
             ...prev,
-            email: data.data?.notification_email || prev.email,
+            email: prev.email || data.data?.notification_email || '',
             farmName: data.data?.farm_name || prev.farmName,
           }))
         }
@@ -66,10 +75,11 @@ export default function Profile() {
 
     const pitayaUser = getPitayaUser()
     const loggedInFullName = pitayaUser ? buildFullName(pitayaUser.firstName, pitayaUser.lastName) : ''
+    const loggedInEmail = String(currentUser?.Email || '').trim()
 
-    const savedProfile = localStorage.getItem('userProfile')
-    const savedPicture = localStorage.getItem('profilePicture')
-    const savedNotifications = localStorage.getItem('userNotifications')
+    const savedProfile = localStorage.getItem(scopedProfileKey)
+    const savedPicture = localStorage.getItem(scopedPictureKey)
+    const savedNotifications = localStorage.getItem(scopedNotificationsKey)
     
     if (savedProfile) {
       const parsedProfile = JSON.parse(savedProfile)
@@ -78,11 +88,18 @@ export default function Profile() {
         ...parsedProfile,
         farmName: parsedProfile?.farmName || parsedProfile?.phone || prev.farmName,
         fullName: loggedInFullName || parsedProfile?.fullName || prev.fullName,
+        email: loggedInEmail || parsedProfile?.email || prev.email,
       }))
     } else if (loggedInFullName) {
       setFormData((prev) => ({
         ...prev,
         fullName: loggedInFullName,
+        email: loggedInEmail || prev.email,
+      }))
+    } else if (loggedInEmail) {
+      setFormData((prev) => ({
+        ...prev,
+        email: loggedInEmail,
       }))
     }
 
@@ -94,7 +111,7 @@ export default function Profile() {
     if (savedNotifications) {
       setNotifications(JSON.parse(savedNotifications))
     }
-  }, [])
+  }, [currentUser?.Email, scopedNotificationsKey, scopedPictureKey, scopedProfileKey])
 
   const handleInputChange = (e) => {
     const { name, value } = e.target
@@ -114,7 +131,7 @@ export default function Profile() {
     setNotifications(newNotifications)
     
     // Save notifications to localStorage
-    localStorage.setItem('userNotifications', JSON.stringify(newNotifications))
+    localStorage.setItem(scopedNotificationsKey, JSON.stringify(newNotifications))
     
     // Show success message
     setSaveStatus({ 
@@ -142,7 +159,7 @@ export default function Profile() {
       reader.onloadend = () => {
         const imageData = reader.result
         setProfilePicture(imageData)
-        localStorage.setItem('profilePicture', imageData)
+        localStorage.setItem(scopedPictureKey, imageData)
         
         setSaveStatus({ 
           type: 'success', 
@@ -187,13 +204,34 @@ export default function Profile() {
       bio: formData.bio
     }
     
-    localStorage.setItem('userProfile', JSON.stringify(profileData))
+    localStorage.setItem(scopedProfileKey, JSON.stringify(profileData))
+
+    // Also update pitayaUser firstName/lastName so the app won't overwrite
+    // the displayed full name on reload (login info is used as authoritative)
+    try {
+      const raw = localStorage.getItem('pitayaUser')
+      if (raw) {
+        const pu = JSON.parse(raw)
+        const parts = String(formData.fullName || '').trim().split(/\s+/)
+        const first = parts.shift() || ''
+        const last = parts.join(' ') || ''
+        pu.firstName = first
+        pu.lastName = last
+        pu.Email = formData.email
+        // keep existing Username/Role etc.
+        localStorage.setItem('pitayaUser', JSON.stringify(pu))
+      }
+    } catch (e) {
+      // non-fatal
+      console.warn('Failed to update pitayaUser localStorage', e)
+    }
 
     try {
       const response = await fetch('/api/user/preferences', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getPitayaUserScopeHeaders(),
         },
         body: JSON.stringify({
           preferred_language: 'en',

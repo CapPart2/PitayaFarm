@@ -161,7 +161,10 @@
                 <p>Register to start using the PITAYAs system.</p>
             </div>
 
-            <form method="POST" action="#">
+            <form id="registerForm" method="POST" action="#">
+                <label for="name">Name</label>
+                <input id="name" type="text" name="name" placeholder="Full name" required>
+
                 <label for="username">Username</label>
                 <input id="username" type="text" name="username" placeholder="Choose a username" required>
 
@@ -179,7 +182,7 @@
 
             <p class="foot-note">
                 Already have an account?
-                <a href="#">Login instead</a>
+                <a href="/auth/login">Login instead</a>
             </p>
         </div>
     </main>
@@ -194,6 +197,40 @@ document.addEventListener('DOMContentLoaded', function () {
             input.type = input.type === 'password' ? 'text' : 'password';
         });
     });
+
+    const form = document.getElementById('registerForm')
+    form.addEventListener('submit', async function (e) {
+        e.preventDefault()
+        const name = document.getElementById('name').value.trim()
+        const username = document.getElementById('username').value.trim()
+        const email = document.getElementById('email').value.trim()
+        const password = document.getElementById('password').value
+
+        const msgEl = document.querySelector('.message') || (() => {
+            const el = document.createElement('div'); el.className = 'message'; form.parentNode.insertBefore(el, form.nextSibling); return el;
+        })()
+
+        try {
+            const res = await fetch('/api/auth/register', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, username, email, password })
+            })
+            const data = await res.json()
+            if (res.ok && data.success) {
+                msgEl.textContent = data.message || 'Account created successfully'
+                msgEl.classList.add('success')
+                // show link back to login
+                const link = document.createElement('div')
+                link.innerHTML = '<p style="margin-top:10px;text-align:center;"><a href="/auth/login">Return to Login</a></p>'
+                form.parentNode.appendChild(link)
+            } else {
+                msgEl.textContent = data.error || 'Registration failed'
+                msgEl.classList.remove('success')
+            }
+        } catch (err) {
+            msgEl.textContent = err.message || 'An error occurred'
+        }
+    })
 });
 </script>
 </body>

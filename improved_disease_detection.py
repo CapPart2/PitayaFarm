@@ -38,47 +38,44 @@ class ImprovedDiseaseDetection:
 
         # Lowered confidence thresholds to allow multi-disease detection
         self.confidence_thresholds = {
-            "Anthracnose": 0.35,
-            "Black Spot": 0.30,
+            "Anthracnose": 0.30,
+            "Black Spot": 0.28,
             "Brown Spot": 0.30,
             "Root Rot": 0.35,
-            "Soft Rot": 0.30,
+            "Soft Rot": 0.28,
             "Stem Rot": 0.35,
-            "Stem_Canker": 0.30,
-            "Twig Blight": 0.30,
+            "Stem_Canker": 0.45,
+            "Twig Blight": 0.28,
             "White Spot": 0.25,
         }
 
-        # Minimum confidence for any disease detection (lowered for multi-disease)
+        # Minimum confidence for any disease detection.
+        # Keep this higher so weak predictions are treated as uncertain.
         self.min_confidence = 0.25
 
     def load_model(self):
         """Load the best available model"""
         try:
-            model_paths = [
-                "leaf_disease_model_702.keras",
-                "leaf_disease_model.keras",
-                "leaf_disease_model_0.keras",
-            ]
+            model_paths = ["leaf_disease_model.keras"]
 
             for model_path in model_paths:
                 if os.path.exists(model_path):
                     try:
                         self.model = tf.keras.models.load_model(model_path)
-                        logger.info(f"✅ Loaded model: {model_path}")
+                        logger.info(f"Loaded model: {model_path}")
                         logger.info(f"   Input shape: {self.model.input_shape}")
                         logger.info(f"   Output shape: {self.model.output_shape}")
                         logger.info(f"   Parameters: {self.model.count_params():,}")
                         return True
                     except Exception as e:
-                        logger.warning(f"❌ Failed to load {model_path}: {str(e)}")
+                        logger.warning(f"Failed to load {model_path}: {str(e)}")
                         continue
 
-            logger.error("❌ No model files found!")
+            logger.error("No model files found!")
             return False
 
         except Exception as e:
-            logger.error(f"❌ Error loading model: {str(e)}")
+            logger.error(f"Error loading model: {str(e)}")
             return False
 
     def enhance_image(self, image):
@@ -103,7 +100,7 @@ class ImprovedDiseaseDetection:
             return image
 
         except Exception as e:
-            logger.error(f"❌ Error enhancing image: {str(e)}")
+            logger.error(f"Error enhancing image: {str(e)}")
             return image
 
     def analyze_image_quality(self, image):
@@ -158,7 +155,7 @@ class ImprovedDiseaseDetection:
             }
 
         except Exception as e:
-            logger.error(f"❌ Error analyzing image quality: {str(e)}")
+            logger.error(f"Error analyzing image quality: {str(e)}")
             return {"quality_score": 0, "is_suitable": False}
 
     def preprocess_image(self, image):
@@ -192,17 +189,278 @@ class ImprovedDiseaseDetection:
             return img_array
 
         except Exception as e:
-            logger.error(f"❌ Error preprocessing image: {str(e)}")
+            logger.error(f"Error preprocessing image: {str(e)}")
             return None
+
+    def validate_target_subject(self, image):
+        """Reject obvious non-plant/non-stem photos (e.g., paper/documents)."""
+        try:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            img_array = np.array(image)
+            hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+
+            h = hsv[:, :, 0]
+            s = hsv[:, :, 1]
+            v = hsv[:, :, 2]
+
+            # Dragon-fruit stem imagery typically has moderate/high saturation
+            # with green/yellow/brown organic regions, not mostly white paper.
+            green_mask = (h >= 25) & (h <= 95) & (s >= 40) & (v >= 25)
+            brown_mask = (h >= 5) & (h <= 30) & (s >= 40) & (v >= 20)
+            organic_mask = (s >= 40) & (v >= 20) & (v <= 245)
+            paper_like_mask = (s <= 28) & (v >= 170)
+
+            green_ratio = float(np.mean(green_mask))
+            brown_ratio = float(np.mean(brown_mask))
+            organic_ratio = float(np.mean(organic_mask))
+            paper_like_ratio = float(np.mean(paper_like_mask))
+            plant_ratio = float(np.mean(green_mask | brown_mask))
+            mean_saturation = float(np.mean(s))
+
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            texture_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+            # Hard rejections for paper/document-like shots.
+            document_like = (
+                paper_like_ratio >= 0.72 and organic_ratio <= 0.20
+            ) or (mean_saturation < 30 and paper_like_ratio >= 0.58)
+
+            # Accept only if there is enough organic, non-paper content.
+            is_target = (
+                not document_like
+                and organic_ratio >= 0.18
+                and plant_ratio >= 0.06
+                and (green_ratio >= 0.03 or brown_ratio >= 0.03)
+                and paper_like_ratio <= 0.68
+                and (texture_score >= 18.0 or mean_saturation >= 45.0)
+            )
+
+            return {
+                "is_target": bool(is_target),
+                "green_ratio": green_ratio,
+                "brown_ratio": brown_ratio,
+                "plant_ratio": plant_ratio,
+                "organic_ratio": organic_ratio,
+                "paper_like_ratio": paper_like_ratio,
+                "mean_saturation": mean_saturation,
+                "texture_score": texture_score,
+                "document_like": bool(document_like),
+            }
+        except Exception as e:
+            logger.error(f"Error validating target subject: {str(e)}")
+            # Fail closed for safety: reject when subject validation breaks.
+            return {"is_target": False, "reason": "validator_error"}
+
+    def generate_image_tiles(self, image):
+        """Create overlapping tiles so separate stem regions can be analyzed independently."""
+        try:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            width, height = image.size
+            min_dimension = min(width, height)
+
+            if min_dimension <= self.img_size[0]:
+                return [(0, image)]
+
+            tile_size = min(max(int(min_dimension * 0.55), 128), min_dimension)
+            stride = max(int(tile_size * 0.4), 48)
+
+            x_positions = list(range(0, max(width - tile_size, 0) + 1, stride))
+            y_positions = list(range(0, max(height - tile_size, 0) + 1, stride))
+
+            if not x_positions:
+                x_positions = [0]
+            if x_positions[-1] != width - tile_size:
+                x_positions.append(max(0, width - tile_size))
+
+            if not y_positions:
+                y_positions = [0]
+            if y_positions[-1] != height - tile_size:
+                y_positions.append(max(0, height - tile_size))
+
+            tiles = []
+            tile_index = 0
+            seen_boxes = set()
+
+            for y in y_positions:
+                for x in x_positions:
+                    box = (x, y, x + tile_size, y + tile_size)
+                    if box in seen_boxes:
+                        continue
+                    seen_boxes.add(box)
+                    tiles.append((tile_index, image.crop(box)))
+                    tile_index += 1
+
+            return tiles or [(0, image)]
+
+        except Exception as e:
+            logger.error(f"Error generating image tiles: {str(e)}")
+            return [(0, image)]
+
+    def _build_prediction_summary(self, predictions):
+        """Convert model output into a disease->confidence mapping."""
+        return {
+            self.class_names[i]: float(predictions[0][i])
+            for i in range(len(self.class_names))
+        }
+
+    def _extract_candidates_from_predictions(
+        self, predictions, quality_score, source_tag
+    ):
+        """Turn one prediction vector into one or more disease candidates."""
+        all_predictions = self._build_prediction_summary(predictions)
+        sorted_predictions = sorted(
+            all_predictions.items(), key=lambda x: x[1], reverse=True
+        )
+
+        quality_multiplier = 1.0 + max(0.0, 0.7 - float(quality_score)) * 0.5
+
+        candidates = []
+        for rank, (disease_name, confidence) in enumerate(sorted_predictions[:4]):
+            required_confidence = self.confidence_thresholds.get(
+                disease_name, self.min_confidence
+            ) * quality_multiplier
+
+            if disease_name == "Stem_Canker":
+                required_confidence = max(required_confidence, 0.45)
+
+            if rank > 0:
+                required_confidence *= 0.9
+
+            if confidence < max(required_confidence, 0.18):
+                continue
+
+            candidates.append(
+                {
+                    "disease_name": disease_name,
+                    "confidence": confidence,
+                    "severity": self.get_disease_severity(disease_name),
+                    "source": source_tag,
+                }
+            )
+
+        return sorted_predictions, candidates
+
+    def _aggregate_tile_candidates(self, tile_candidates):
+        """Group per-tile candidates into a final multiple-disease result list."""
+        grouped = {}
+        for candidate in tile_candidates:
+            grouped.setdefault(candidate["disease_name"], []).append(candidate)
+
+        scored_diseases = []
+
+        for disease_name, entries in grouped.items():
+            confidences = [entry["confidence"] for entry in entries]
+            peak_confidence = max(confidences)
+            average_confidence = sum(confidences) / len(confidences)
+            tile_support = len(entries)
+
+            severity = self.get_disease_severity(disease_name)
+            base_threshold = self.confidence_thresholds.get(
+                disease_name, self.min_confidence
+            )
+            if disease_name == "Stem_Canker":
+                base_threshold = max(base_threshold, 0.45)
+
+            support_bonus = min(0.15, 0.05 * max(tile_support - 1, 0))
+            confidence_score = min(
+                1.0,
+                (peak_confidence * 0.55)
+                + (average_confidence * 0.25)
+                + support_bonus,
+            )
+
+            minimum_score = max(0.16, base_threshold * 0.55)
+
+            # If a disease appears repeatedly across tiles, keep it even when the
+            # average score is lower than the primary disease.
+            if tile_support >= 2:
+                minimum_score = min(minimum_score, base_threshold * 0.45)
+
+            if confidence_score < minimum_score:
+                continue
+
+            scored_diseases.append(
+                {
+                    "disease_name": disease_name,
+                    "confidence": confidence_score,
+                    "severity": severity,
+                    "tile_support": tile_support,
+                    "peak_confidence": peak_confidence,
+                    "average_confidence": average_confidence,
+                }
+            )
+
+        scored_diseases.sort(
+            key=lambda item: (item["confidence"], item.get("tile_support", 0)),
+            reverse=True,
+        )
+
+        detected_diseases = scored_diseases[:3]
+
+        # If only one disease survives the score floor but there is another
+        # plausible disease in the image, keep the next-best candidate so mixed
+        # infections do not collapse back to a single label.
+        if len(detected_diseases) < 2 and len(scored_diseases) < len(grouped):
+            remaining = []
+            for disease_name, entries in grouped.items():
+                if any(item["disease_name"] == disease_name for item in detected_diseases):
+                    continue
+
+                confidences = [entry["confidence"] for entry in entries]
+                peak_confidence = max(confidences)
+                if peak_confidence < 0.15:
+                    continue
+
+                average_confidence = sum(confidences) / len(confidences)
+                tile_support = len(entries)
+                severity = self.get_disease_severity(disease_name)
+                base_threshold = self.confidence_thresholds.get(
+                    disease_name, self.min_confidence
+                )
+                if disease_name == "Stem_Canker":
+                    base_threshold = max(base_threshold, 0.45)
+
+                support_bonus = min(0.12, 0.04 * max(tile_support - 1, 0))
+                fallback_score = min(
+                    1.0,
+                    (peak_confidence * 0.5)
+                    + (average_confidence * 0.2)
+                    + support_bonus,
+                )
+
+                if fallback_score < max(0.14, base_threshold * 0.35):
+                    continue
+
+                remaining.append(
+                    {
+                        "disease_name": disease_name,
+                        "confidence": fallback_score,
+                        "severity": severity,
+                        "tile_support": tile_support,
+                        "peak_confidence": peak_confidence,
+                        "average_confidence": average_confidence,
+                    }
+                )
+
+            remaining.sort(
+                key=lambda item: (item["confidence"], item.get("tile_support", 0)),
+                reverse=True,
+            )
+            detected_diseases.extend(remaining[: 2 - len(detected_diseases)])
+
+        return detected_diseases[:3]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
         try:
-            # Get all predictions for analysis
-            all_predictions = {
-                self.class_names[i]: float(predictions[0][i])
-                for i in range(len(self.class_names))
-            }
+            all_predictions = self._build_prediction_summary(predictions)
+            # Quality-adjusted threshold multiplier. Better images keep the base
+            # threshold, while lower-quality inputs need slightly stronger confidence.
+            quality_multiplier = 1.0 + max(0.0, 0.7 - float(quality_score)) * 0.5
 
             # Sort predictions by confidence
             sorted_predictions = sorted(
@@ -210,17 +468,25 @@ class ImprovedDiseaseDetection:
             )
 
             # Log all predictions for debugging
-            logger.info(f"🔍 All predictions (quality_score: {quality_score:.2f}):")
+            logger.info(f"All predictions (quality_score: {quality_score:.2f}):")
             for disease_name, confidence in sorted_predictions:
                 logger.info(f"  {disease_name}: {confidence:.2%}")
 
-            # Changed approach: Return top 3 diseases regardless of thresholds
-            # This ensures multi-disease detection always shows multiple results
-            logger.info(f"📊 Using top-3 approach (thresholds disabled)")
-
-            # Get top 3 diseases (or all if less than 3)
+            # Keep only diseases that meet their confidence threshold.
             detected_diseases = []
-            for disease_name, confidence in sorted_predictions[:3]:
+            for disease_name, confidence in sorted_predictions:
+                required_confidence = self.confidence_thresholds.get(
+                    disease_name, self.min_confidence
+                ) * quality_multiplier
+
+                # Stem Canker is frequently confused with nearby stem blemishes,
+                # so require a slightly stronger signal before surfacing it.
+                if disease_name == "Stem_Canker":
+                    required_confidence = max(required_confidence, 0.45)
+
+                if confidence < required_confidence:
+                    continue
+
                 detected_diseases.append(
                     {
                         "disease_name": disease_name,
@@ -228,16 +494,42 @@ class ImprovedDiseaseDetection:
                         "severity": self.get_disease_severity(disease_name),
                     }
                 )
-                logger.info(f"  ✅ {disease_name}: {confidence:.2%}")
+                logger.info(f"  {disease_name}: {confidence:.2%}")
 
-            logger.info(f"🎯 Total detected diseases: {len(detected_diseases)}")
+                if len(detected_diseases) == 2:
+                    break
+
+            logger.info(f"Total detected diseases: {len(detected_diseases)}")
+
+            top_confidence = sorted_predictions[0][1]
+            second_confidence = sorted_predictions[1][1] if len(sorted_predictions) >= 2 else 0.0
+            top_disease_name = sorted_predictions[0][0]
+
+            # If the best class is clearly above the runner-up and meets its class
+            # threshold, return it as a single detection.
+            top_required_confidence = self.confidence_thresholds.get(
+                top_disease_name, self.min_confidence
+            ) * quality_multiplier
+            confidence_gap = top_confidence - second_confidence
+
+            if top_confidence >= top_required_confidence and confidence_gap >= 0.05:
+                detected_diseases = [
+                    {
+                        "disease_name": top_disease_name,
+                        "confidence": top_confidence,
+                        "severity": self.get_disease_severity(top_disease_name),
+                    }
+                ]
+            else:
+                detected_diseases = []
+
+            # Stem Canker stays stricter than the others.
+            if detected_diseases and top_disease_name == "Stem_Canker" and top_confidence < 0.45:
+                detected_diseases = []
 
             # If no diseases detected, check for healthy leaf
             if not detected_diseases:
-                top_confidence = sorted_predictions[0][1]
                 if len(sorted_predictions) >= 2:
-                    second_confidence = sorted_predictions[1][1]
-                    confidence_gap = top_confidence - second_confidence
                     if top_confidence < 0.75 and confidence_gap < 0.15:
                         return {
                             "success": True,
@@ -295,7 +587,7 @@ class ImprovedDiseaseDetection:
                 }
 
         except Exception as e:
-            logger.error(f"❌ Error validating prediction: {str(e)}")
+            logger.error(f"Error validating prediction: {str(e)}")
             return {"success": False, "error": str(e)}
 
     def predict_disease(self, image):
@@ -305,6 +597,17 @@ class ImprovedDiseaseDetection:
                 return None
 
         try:
+            subject_validation = self.validate_target_subject(image)
+            if not subject_validation.get("is_target", True):
+                return {
+                    "success": True,
+                    "disease_name": None,
+                    "confidence": 0,
+                    "message": "Invalid image subject. Please capture dragon fruit stem only.",
+                    "reason": "invalid_subject",
+                    "subject_validation": subject_validation,
+                }
+
             # Analyze image quality first
             quality = self.analyze_image_quality(image)
 
@@ -323,17 +626,79 @@ class ImprovedDiseaseDetection:
             if processed_image is None:
                 return {"success": False, "error": "Failed to preprocess image"}
 
-            # Make prediction
-            predictions = self.model.predict(processed_image, verbose=0)
+            whole_image_predictions = self.model.predict(processed_image, verbose=0)
+            whole_sorted_predictions, whole_candidates = (
+                self._extract_candidates_from_predictions(
+                    whole_image_predictions,
+                    quality["quality_score"],
+                    "whole_image",
+                )
+            )
 
-            # Validate prediction with enhanced logic
-            result = self.validate_prediction(predictions, quality["quality_score"])
+            tile_candidates = []
+            tile_predictions = []
+            for tile_index, tile in self.generate_image_tiles(image):
+                tile_quality = self.analyze_image_quality(tile)
+                if tile_quality.get("quality_score", 0) < 0.3:
+                    continue
+
+                tile_input = self.preprocess_image(tile)
+                if tile_input is None:
+                    continue
+
+                predictions = self.model.predict(tile_input, verbose=0)
+                sorted_predictions, candidates = self._extract_candidates_from_predictions(
+                    predictions,
+                    tile_quality["quality_score"],
+                    f"tile_{tile_index}",
+                )
+
+                tile_predictions.append(sorted_predictions[:3])
+                tile_candidates.extend(candidates)
+
+            all_candidates = whole_candidates + tile_candidates
+            detected_diseases = self._aggregate_tile_candidates(all_candidates)
+
+            if not detected_diseases:
+                result = self.validate_prediction(
+                    whole_image_predictions,
+                    quality["quality_score"],
+                )
+            else:
+                primary_disease = detected_diseases[0]
+                result = {
+                    "success": True,
+                    "disease_name": primary_disease["disease_name"],
+                    "confidence": primary_disease["confidence"],
+                    "severity": primary_disease["severity"],
+                    "message": (
+                        f"{len(detected_diseases)} diseases detected - primary: "
+                        f"{primary_disease['disease_name']}"
+                    ),
+                    "reason": (
+                        "multiple_diseases"
+                        if len(detected_diseases) > 1
+                        else "disease_detected"
+                    ),
+                    "all_predictions": whole_sorted_predictions[:5],
+                    "detected_diseases": detected_diseases,
+                }
+
             result["quality_details"] = quality
+            result["detected_diseases"] = result.get("detected_diseases", detected_diseases)
+            result["subject_validation"] = subject_validation
+
+            if result.get("detected_diseases") and len(result["detected_diseases"]) > 1:
+                result["reason"] = "multiple_diseases"
+                result["message"] = (
+                    f"{len(result['detected_diseases'])} diseases detected - primary: "
+                    f"{result['detected_diseases'][0]['disease_name']}"
+                )
 
             return result
 
         except Exception as e:
-            logger.error(f"❌ Error predicting disease: {str(e)}")
+            logger.error(f"Error predicting disease: {str(e)}")
             return {"success": False, "error": str(e)}
 
     def get_disease_severity(self, disease_name):
@@ -416,7 +781,7 @@ def create_improved_predict_function():
                 }
 
         except Exception as e:
-            logger.error(f"❌ Error in predict_image: {str(e)}")
+            logger.error(f"Error in predict_image: {str(e)}")
             return {"success": False, "error": str(e), "detection": None}
 
     return predict_image
@@ -431,10 +796,10 @@ def test_improved_detection():
 
     # Test model loading
     if not detector.load_model():
-        print("❌ Failed to load model")
+        print("Failed to load model")
         return False
 
-    print("✅ Model loaded successfully")
+    print("Model loaded successfully")
 
     # Test with different image scenarios
     test_cases = [
@@ -444,7 +809,7 @@ def test_improved_detection():
     ]
 
     for test_name, test_type, expected in test_cases:
-        print(f"\n📋 Test: {test_name}")
+        print(f"\nTest: {test_name}")
 
         if test_type == "green":
             # Create healthy leaf image
@@ -490,17 +855,17 @@ def test_improved_detection():
 
         if result["success"]:
             if test_type == "green" and result["disease_name"] is None:
-                print("✅ PASS: Correctly identified as healthy")
+                print("PASS: Correctly identified as healthy")
             elif test_type == "disease" and result["disease_name"]:
                 print(
-                    f"✅ PASS: Detected disease - {result['disease_name']} ({result['confidence']:.1%})"
+                    f"PASS: Detected disease - {result['disease_name']} ({result['confidence']:.1%})"
                 )
             elif (
                 test_type == "blurry"
                 and result["disease_name"] is None
                 and "quality" in result["message"].lower()
             ):
-                print("✅ PASS: Correctly rejected low quality image")
+                print("PASS: Correctly rejected low quality image")
             else:
                 print(f"⚠️ UNEXPECTED: {result['message']}")
 
@@ -510,7 +875,7 @@ def test_improved_detection():
                     f"   Quality Score: {result['quality_details']['quality_score']:.2f}"
                 )
         else:
-            print(f"❌ FAIL: {result.get('error', 'Unknown error')}")
+            print(f"FAIL: {result.get('error', 'Unknown error')}")
 
     print("\n🎉 Improved Detection Test Complete!")
     return True

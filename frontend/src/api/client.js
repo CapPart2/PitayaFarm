@@ -1,7 +1,10 @@
 // API client for PITAYA backend (Django).
 // Vite proxy: /api -> http://127.0.0.1:8000 (so /api/predict/ -> Django /predict/)
 
+import { getPitayaUserScopeHeaders } from './userScope';
+
 const API_BASE = 'http://192.168.1.59:5000';
+const DASHBOARD_API_BASE = 'http://192.168.1.59:5001/api/dashboard';
 
 // Cache for CSRF token
 let csrfToken = null;
@@ -87,6 +90,7 @@ async function fetchWithAuth(url, options = {}) {
   const headers = {
     'Content-Type': 'application/json',
     ...(token && { 'X-CSRFToken': token }),
+    ...getPitayaUserScopeHeaders(),
     ...(options.headers || {}),
   };
   
@@ -100,7 +104,7 @@ async function fetchWithAuth(url, options = {}) {
   const response = await fetch(finalUrl, {
     ...options,
     headers,
-    credentials: 'include',
+    credentials: 'same-origin',
   });
 
   return handleResponse(response);
@@ -153,13 +157,59 @@ const reportsApi = {
     if (endDate) params.append('end_date', endDate);
     
     const queryString = params.toString() ? `?${params.toString()}` : '';
-    // Use Dashboard API (port 5001) for reports
-    return fetchWithAuth(`${API_BASE}/dashboard/reports${queryString}`);
+    const response = await fetchWithAuth(`${DASHBOARD_API_BASE}/reports${queryString}`);
+    const rows = response?.data || [];
+
+    const normalized = rows.map((r) => {
+      const diseaseName = r.DiseaseType || r.disease_type || 'Unknown';
+      const confidence = Number(r.Confidence ?? r.confidence ?? 0) || 0;
+      const detectedDate = r.DateTime || r.detected_date || r.created_at || null;
+      return {
+        id: r.DetectionID || r.id,
+        disease_name: diseaseName,
+        confidence,
+        detected_date: detectedDate,
+      };
+    });
+
+    const diseaseCounter = new Map();
+    const trendCounter = new Map();
+    let confidenceTotal = 0;
+
+    normalized.forEach((row) => {
+      diseaseCounter.set(row.disease_name, (diseaseCounter.get(row.disease_name) || 0) + 1);
+      confidenceTotal += row.confidence;
+
+      const day = (row.detected_date || '').slice(0, 10);
+      if (day) {
+        trendCounter.set(day, (trendCounter.get(day) || 0) + 1);
+      }
+    });
+
+    const disease_distribution = Array.from(diseaseCounter.entries())
+      .map(([disease_name, count]) => ({ disease_name, count }))
+      .sort((a, b) => b.count - a.count);
+
+    const detection_trends = Array.from(trendCounter.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      total_scans: normalized.length,
+      diseases_detected: normalized.length,
+      average_confidence: normalized.length ? confidenceTotal / normalized.length : 0,
+      disease_distribution,
+      recent_detections: normalized
+        .slice()
+        .sort((a, b) => String(b.detected_date || '').localeCompare(String(a.detected_date || '')))
+        .slice(0, 10),
+      detection_trends,
+    };
   },
 
   // Get disease statistics
   getDiseaseStats: async () => {
-    const response = await fetchWithAuth(`${API_BASE}/dashboard/disease-stats`);
+    const response = await fetchWithAuth(`${DASHBOARD_API_BASE}/disease-stats`);
     return response.data || {};
   },
 };
@@ -171,12 +221,20 @@ const predictionApi = {
     const formData = new FormData();
     formData.append('file', file, file?.name || 'upload.jpg');
 
-    return fetchWithAuth(`${API_BASE}/predict`, {
+    // Direct fetch without credentials for Flask API
+    const response = await fetch(`${API_BASE}/predict`, {
       method: 'POST',
       body: formData,
-      headers: {}, // fetchWithAuth automatically removes Content-Type for FormData
-      skipCsrf: true, // Flask doesn't require Django CSRF
+      headers: getPitayaUserScopeHeaders(),
+      // Don't set Content-Type header for FormData - browser sets it automatically with boundary
     });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+    }
+
+    return await response.json();
   },
 
   // Map prediction response to frontend format

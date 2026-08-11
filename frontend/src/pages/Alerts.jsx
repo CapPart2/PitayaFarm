@@ -5,6 +5,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import SeverityBadge from '../components/SeverityBadge';
 
 export default function Alerts() {
+  const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5001').replace(/\/$/, '');
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -37,7 +38,10 @@ export default function Alerts() {
           // If multiple records in session, combine them
           if (records.length > 1) {
             const diseaseNames = records.map(r => r.disease_name || r.DiseaseType).join(', ');
-            const sumConfidence = records.reduce((sum, r) => sum + (r.confidence || r.Confidence || 0), 0);
+            const averageConfidence = records.reduce(
+              (sum, r) => sum + (r.confidence || r.Confidence || 0),
+              0
+            ) / records.length;
             const maxSeverity = records.some(r => (r.severity || r.Severity) === 'high') ? 'high' : 
                                records.some(r => (r.severity || r.Severity) === 'medium') ? 'medium' : 'low';
             
@@ -47,7 +51,7 @@ export default function Alerts() {
               id: sessionId,
               disease_name: diseaseNames,
               severity: maxSeverity,
-              confidence: sumConfidence,
+              confidence: averageConfidence,
               isMultiDisease: true,
               diseases: records.map(r => ({
                 name: r.disease_name || r.DiseaseType,
@@ -105,12 +109,12 @@ export default function Alerts() {
                       <div className="flex items-start gap-4 flex-1">
                         {alert.image_path && alert.image_path !== 'detection_image.jpg' && (
                           <img 
-                            src={`http://localhost:5001/${alert.image_path.replace(/\\/g, '/')}`} 
+                            src={`${API_BASE}/api/uploads/${alert.image_path.replace(/\\/g, '/')}`} 
                             alt="Detection" 
                             className="w-16 h-16 object-cover rounded cursor-pointer hover:opacity-80 flex-shrink-0"
                             onClick={(e) => {
                               e.preventDefault()
-                              window.open(`http://localhost:5001/${alert.image_path.replace(/\\/g, '/')}`, '_blank')
+                              window.open(`${API_BASE}/api/uploads/${alert.image_path.replace(/\\/g, '/')}`, '_blank')
                             }}
                           />
                         )}

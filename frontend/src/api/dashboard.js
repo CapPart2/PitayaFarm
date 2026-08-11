@@ -2,17 +2,32 @@
  * Dashboard API – Database-driven charts implementation
  */
 
-const API_BASE = 'http://192.168.1.59:5001/api/dashboard';
+import { getPitayaUserScopeHeaders } from './userScope';
+
+const configuredDashboardUrl = import.meta.env.VITE_DASHBOARD_API_URL?.replace(/\/$/, '');
+const API_BASE = configuredDashboardUrl
+  ? configuredDashboardUrl.endsWith('/api/dashboard')
+    ? configuredDashboardUrl
+    : `${configuredDashboardUrl}/api/dashboard`
+  : '/api/dashboard';
+const REQUEST_TIMEOUT_MS = 12_000;
 
 // Helper function for API calls
 async function apiCall(endpoint, options = {}) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
   try {
+    const requestHeaders = {
+      'Content-Type': 'application/json',
+      ...getPitayaUserScopeHeaders(),
+      ...(options.headers || {}),
+    }
+
     const response = await fetch(`${API_BASE}${endpoint}`, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
       ...options,
+      headers: requestHeaders,
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -24,6 +39,8 @@ async function apiCall(endpoint, options = {}) {
   } catch (error) {
     console.error(`API call failed for ${endpoint}:`, error);
     throw error;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 
@@ -176,13 +193,14 @@ export async function uploadYieldImage(file, conf = 0.25) {
     const form = new FormData();
     form.append('image', file);
     form.append('conf', String(conf));
-    // Use classical HSV color-based detection on the backend
-    // so web output matches the training script behavior
-    form.append('method', 'color');
+    // Use the trained detector plus the strict, fruit-shaped colour fallback.
+    // This handles fruit partly covered by cactus arms without counting soil.
+    form.append('method', 'hybrid');
 
     const response = await fetch(`${API_BASE}/yield-detect`, {
       method: 'POST',
-      body: form
+      body: form,
+      headers: getPitayaUserScopeHeaders(),
     });
 
     if (!response.ok) {
@@ -204,16 +222,17 @@ export async function uploadYieldVideo(videoFile, conf = 0.25) {
     const form = new FormData();
     form.append('video', videoFile);
     form.append('conf', String(conf));
-    form.append('method', 'color'); // use same HSV detection as image capture
+    form.append('method', 'color');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
       body: form,
+      headers: getPitayaUserScopeHeaders(),
     });
 
     if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
+      const errorData = await response.json().catch(() => null);
+      throw new Error(errorData?.error || `Video upload failed (HTTP ${response.status}).`);
     }
 
     const data = await response.json();
@@ -234,6 +253,7 @@ export async function detectYieldFromStream(streamUrl, conf = 0.25) {
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
       body: form,
+      headers: getPitayaUserScopeHeaders(),
     });
 
     if (!response.ok) {
@@ -289,10 +309,12 @@ function getFallbackData() {
 // Legacy function for backward compatibility
 export async function fetchDashboard() {
   try {
-    const summary = await fetchDashboardSummary();
-    const diseaseStats = await fetchDiseaseStats();
-    const yieldStats = await fetchYieldStats();
-    const alerts = await fetchAlerts();
+    const [summary, diseaseStats, yieldStats, alerts] = await Promise.all([
+      fetchDashboardSummary(),
+      fetchDiseaseStats(),
+      fetchYieldStats(),
+      fetchAlerts(),
+    ]);
 
     return {
       totalDetections: summary.totalDetections || 0,

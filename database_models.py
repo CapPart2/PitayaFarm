@@ -76,6 +76,7 @@ class DatabaseManager:
         try:
             cursor.execute("PRAGMA table_info(disease_detections)")
             columns = [row[1] for row in cursor.fetchall()]
+            normalized_columns = {column.lower() for column in columns}
 
             # Migrate from old column names if needed
             if "disease_name" in columns and "DiseaseType" not in columns:
@@ -94,6 +95,18 @@ class DatabaseManager:
                 cursor.execute(
                     "ALTER TABLE disease_detections RENAME COLUMN id TO DetectionID"
                 )
+
+            # Add columns expected by the current write path when older databases
+            # were created before these fields existed.
+            for column_name, column_sql in [
+                ("location", "location TEXT"),
+                ("image_path", "image_path TEXT"),
+                ("user_id", "user_id TEXT DEFAULT 'default_user'"),
+            ]:
+                if column_name not in normalized_columns:
+                    cursor.execute(
+                        f"ALTER TABLE disease_detections ADD COLUMN {column_sql}"
+                    )
 
         except Exception as e:
             print(f"Migration note: {e}")
@@ -170,6 +183,157 @@ class DatabaseManager:
             if column_name not in preference_columns:
                 cursor.execute(f"ALTER TABLE user_preferences ADD COLUMN {column_sql}")
 
+        # Create users table for admin/user management
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                UserID INTEGER PRIMARY KEY AUTOINCREMENT,
+                Username TEXT NOT NULL UNIQUE,
+                PasswordHash TEXT NOT NULL,
+                Email TEXT UNIQUE,
+                FirstName TEXT,
+                LastName TEXT,
+                Role TEXT DEFAULT 'user',
+                Status TEXT DEFAULT 'active',
+                CreatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                UpdatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                LastLogin TEXT
+            )
+        """)
+
+        # Create user_logs table for activity tracking
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS user_logs (
+                LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+                UserID INTEGER,
+                Action TEXT NOT NULL,
+                Description TEXT,
+                IPAddress TEXT,
+                UserAgent TEXT,
+                CreatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(UserID) REFERENCES users(UserID) ON DELETE SET NULL
+            )
+        """)
+
+        # Create site_settings table for configuration
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS site_settings (
+                SettingID INTEGER PRIMARY KEY AUTOINCREMENT,
+                SettingKey TEXT NOT NULL UNIQUE,
+                SettingValue TEXT,
+                SettingType TEXT DEFAULT 'string',
+                Category TEXT DEFAULT 'general',
+                Description TEXT,
+                UpdatedAt TEXT DEFAULT CURRENT_TIMESTAMP,
+                UpdatedBy INTEGER
+            )
+        """)
+
+        # Insert default admin user if not exists
+        cursor.execute("SELECT COUNT(*) FROM users WHERE Role = 'admin'")
+        admin_count = cursor.fetchone()[0]
+        if admin_count == 0:
+            import hashlib
+
+            default_password = hashlib.sha256("admin123".encode()).hexdigest()
+            cursor.execute(
+                """
+                INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
+                    "admin",
+                    default_password,
+                    "admin@pitaya.com",
+                    "System",
+                    "Administrator",
+                    "admin",
+                    "active",
+                ),
+            )
+
+        # Insert a test/user account for development if not exists
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM users WHERE Username = ?", ("robabarintos",)
+            )
+            if cursor.fetchone()[0] == 0:
+                import hashlib as _hashlib
+
+                test_pw = _hashlib.sha256("robrob12".encode()).hexdigest()
+                cursor.execute(
+                    """
+                    INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                    (
+                        "robabarintos",
+                        test_pw,
+                        "robabarintos@example.com",
+                        "Rob",
+                        "Barintos",
+                        "user",
+                        "active",
+                    ),
+                )
+        except Exception:
+            # Non-fatal; continue initialization
+            pass
+
+        # Insert default site settings if not exists
+        default_settings = [
+            (
+                "site_name",
+                "PITAYA Farm Management System",
+                "string",
+                "general",
+                "Site name",
+            ),
+            (
+                "site_description",
+                "Dragon Fruit Disease Detection and Yield Prediction",
+                "string",
+                "general",
+                "Site description",
+            ),
+            ("max_users", "100", "number", "general", "Maximum number of users"),
+            (
+                "enable_registration",
+                "true",
+                "boolean",
+                "general",
+                "Allow new user registration",
+            ),
+            ("maintenance_mode", "false", "boolean", "general", "Maintenance mode"),
+            ("default_language", "en", "string", "general", "Default language"),
+            (
+                "alert_email_enabled",
+                "true",
+                "boolean",
+                "notifications",
+                "Email alerts enabled",
+            ),
+            (
+                "alert_sms_enabled",
+                "false",
+                "boolean",
+                "notifications",
+                "SMS alerts enabled",
+            ),
+        ]
+
+        for key, value, setting_type, category, description in default_settings:
+            cursor.execute(
+                "SELECT COUNT(*) FROM site_settings WHERE SettingKey = ?", (key,)
+            )
+            if cursor.fetchone()[0] == 0:
+                cursor.execute(
+                    """
+                    INSERT INTO site_settings (SettingKey, SettingValue, SettingType, Category, Description)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                    (key, value, setting_type, category, description),
+                )
+
         conn.commit()
         conn.close()
 
@@ -231,9 +395,9 @@ class DatabaseManager:
             return {
                 "user_id": user_id,
                 "preferred_language": "en",
-                "notification_email": "robabarintos@gmail.com",
+                "notification_email": None,
                 "farm_name": None,
-                "email_notifications_enabled": True,
+                "email_notifications_enabled": False,
                 "updated_at": None,
             }
 
@@ -253,10 +417,12 @@ class DatabaseManager:
         severity: str,
         confidence: float,
         location: str,
+        user_id: str,
         additional_diseases: Optional[List[Dict]] = None,
     ) -> bool:
         """Send a professional SMTP alert for high severity detections with multi-disease support."""
-        prefs = self.get_user_preferences()
+        scoped_user_id = str(user_id or "default_user")
+        prefs = self.get_user_preferences(scoped_user_id)
         recipient = (prefs.get("notification_email") or "").strip()
 
         if not recipient or not prefs.get("email_notifications_enabled", True):
@@ -264,8 +430,8 @@ class DatabaseManager:
 
         smtp_host = "smtp.gmail.com"
         smtp_port = 587
-        smtp_username = "jacofarm1@gmail.com"
-        smtp_password = "daml mkle iehe ybny"
+        smtp_username = os.getenv("SMTP_USERNAME", "jacofarm1@gmail.com")
+        smtp_password = os.getenv("SMTP_PASSWORD", "daml mkle iehe ybny")
         smtp_from = smtp_username
         smtp_use_tls = True
 
@@ -395,6 +561,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         image_path: Optional[str] = None,
         additional_diseases: Optional[List[Dict]] = None,
         session_id: Optional[str] = None,
+        user_id: str = "default_user",
     ) -> int:
         """
         Add a new disease detection record - SINGLE SOURCE OF TRUTH
@@ -407,16 +574,24 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         # Add session_id column if it doesn't exist
         cursor.execute("PRAGMA table_info(disease_detections)")
         columns = [col[1] for col in cursor.fetchall()]
+        column_lookup = {column.lower(): column for column in columns}
         if "session_id" not in columns:
             cursor.execute("ALTER TABLE disease_detections ADD COLUMN session_id TEXT")
+
+        user_id_column = column_lookup.get("user_id") or column_lookup.get("userid")
+        if not user_id_column:
+            cursor.execute(
+                "ALTER TABLE disease_detections ADD COLUMN user_id TEXT DEFAULT 'default_user'"
+            )
+            user_id_column = "user_id"
 
         # Insert into Disease_Detections table
         cursor.execute(
             """
             INSERT INTO disease_detections 
-            (DiseaseType, severity, Confidence, DateTime, location, image_path, session_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
+            (DiseaseType, severity, Confidence, DateTime, location, image_path, {user_id_column}, session_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """.format(user_id_column=user_id_column),
             (
                 disease_type,
                 severity,
@@ -424,6 +599,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
                 datetime.now().isoformat(),
                 location,
                 image_path,
+                user_id or "default_user",
                 session_id,
             ),
         )
@@ -453,6 +629,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
                 severity=severity,
                 confidence=confidence,
                 location=location or "Unknown location",
+                user_id=user_id,
                 additional_diseases=additional_diseases,
             )
 
@@ -461,7 +638,10 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
     # ========== DATA INTEGRITY METHODS ==========
 
     def get_all_disease_detections(
-        self, start_date: Optional[str] = None, end_date: Optional[str] = None
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[Dict]:
         """Get ALL disease detections - Single Source of Truth"""
         conn = sqlite3.connect(self.db_path)
@@ -480,6 +660,9 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         if end_date:
             conditions.append("DateTime <= ?")
             params.append(end_date)
+        if user_id:
+            conditions.append("user_id = ?")
+            params.append(user_id)
 
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
@@ -507,18 +690,26 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         conn.close()
         return detections
 
-    def get_all_alerts_with_detections(self) -> List[Dict]:
+    def get_all_alerts_with_detections(
+        self, user_id: Optional[str] = None
+    ) -> List[Dict]:
         """Get ALL alerts with their detection data - Full History"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT a.AlertID, a.DetectionID, a.Status, a.CreatedAt,
-                   d.DiseaseType, d.Severity, d.Confidence, d.DateTime, d.Location, d.image_path, d.session_id
+        query = """
+                 SELECT a.AlertID, a.DetectionID, a.Status, a.CreatedAt,
+                     d.DiseaseType, d.Severity, d.Confidence, d.DateTime, d.Location, d.image_path, d.session_id, d.user_id
             FROM alerts a
             JOIN disease_detections d ON a.DetectionID = d.DetectionID
-            ORDER BY d.DateTime DESC
-        """)
+        """
+        params = []
+        if user_id:
+            query += " WHERE d.user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY d.DateTime DESC"
+
+        cursor.execute(query, params)
 
         alerts = []
         for row in cursor.fetchall():
@@ -535,6 +726,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
                     "Location": row[8],
                     "image_path": row[9],
                     "session_id": row[10],
+                    "UserID": row[11],
                 }
             )
 
@@ -609,46 +801,75 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             },
         }
 
-    def get_dashboard_metrics(self) -> Dict:
+    def get_dashboard_metrics(self, user_id: Optional[str] = None) -> Dict:
         """Dashboard metrics computed directly from Disease_Detections"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        where_clause = ""
+        params = []
+        if user_id:
+            where_clause = " WHERE user_id = ?"
+            params.append(user_id)
+
         # Total detections
-        cursor.execute("SELECT COUNT(*) FROM disease_detections")
+        cursor.execute(f"SELECT COUNT(*) FROM disease_detections{where_clause}", params)
         total_detections = cursor.fetchone()[0]
 
         # High severity cases
-        cursor.execute(
-            "SELECT COUNT(*) FROM disease_detections WHERE Severity = 'high'"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE Severity = 'high' AND user_id = ?",
+                [user_id],
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE Severity = 'high'"
+            )
         high_severity = cursor.fetchone()[0]
 
         # Disease distribution
-        cursor.execute("""
+        disease_query = """
             SELECT DiseaseType, COUNT(*) as count
             FROM disease_detections
-            GROUP BY DiseaseType
-            ORDER BY count DESC
-        """)
+        """
+        if user_id:
+            disease_query += " WHERE user_id = ?"
+        disease_query += " GROUP BY DiseaseType ORDER BY count DESC"
+        cursor.execute(disease_query, [user_id] if user_id else [])
         disease_distribution = dict(cursor.fetchall())
 
         # Severity distribution
-        cursor.execute("""
+        severity_query = """
             SELECT Severity, COUNT(*) as count
             FROM disease_detections
-            GROUP BY Severity
-        """)
+        """
+        if user_id:
+            severity_query += " WHERE user_id = ?"
+        severity_query += " GROUP BY Severity"
+        cursor.execute(severity_query, [user_id] if user_id else [])
         severity_distribution = dict(cursor.fetchall())
 
         # Daily detections (last 30 days)
-        cursor.execute("""
-            SELECT DATE(DateTime) as date, COUNT(*) as count
-            FROM disease_detections
-            WHERE DateTime >= date('now', '-30 days')
-            GROUP BY DATE(DateTime)
-            ORDER BY date
-        """)
+        if user_id:
+            cursor.execute(
+                """
+                SELECT DATE(DateTime) as date, COUNT(*) as count
+                FROM disease_detections
+                WHERE DateTime >= date('now', '-30 days') AND user_id = ?
+                GROUP BY DATE(DateTime)
+                ORDER BY date
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("""
+                SELECT DATE(DateTime) as date, COUNT(*) as count
+                FROM disease_detections
+                WHERE DateTime >= date('now', '-30 days')
+                GROUP BY DATE(DateTime)
+                ORDER BY date
+                """)
         daily_detections = dict(cursor.fetchall())
 
         conn.close()
@@ -662,10 +883,17 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         }
 
     def get_reports_data(
-        self, start_date: Optional[str] = None, end_date: Optional[str] = None
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        user_id: Optional[str] = None,
     ) -> List[Dict]:
         """Reports data from Disease_Detections - Single Source of Truth"""
-        return self.get_all_disease_detections(start_date=start_date, end_date=end_date)
+        return self.get_all_disease_detections(
+            start_date=start_date,
+            end_date=end_date,
+            user_id=user_id,
+        )
 
     def add_detection(
         self,
@@ -870,38 +1098,63 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             }
         return None
 
-    def get_disease_statistics(self) -> Dict:
+    def get_disease_statistics(self, user_id: Optional[str] = None) -> Dict:
         """Get disease statistics for dashboard"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         # Total detections
-        cursor.execute("SELECT COUNT(*) FROM disease_detections")
+        if user_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE user_id = ?", [user_id]
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) FROM disease_detections")
         total_detections = cursor.fetchone()[0]
 
         # High severity cases
-        cursor.execute(
-            "SELECT COUNT(*) FROM disease_detections WHERE severity = 'High'"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE severity = 'High' AND user_id = ?",
+                [user_id],
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE severity = 'High'"
+            )
         high_severity_count = cursor.fetchone()[0]
 
         # Disease distribution
-        cursor.execute("""
+        disease_query = """
             SELECT DiseaseType, COUNT(*) as count
             FROM disease_detections
-            GROUP BY DiseaseType
-            ORDER BY count DESC
-        """)
+        """
+        if user_id:
+            disease_query += " WHERE user_id = ?"
+        disease_query += " GROUP BY DiseaseType ORDER BY count DESC"
+        cursor.execute(disease_query, [user_id] if user_id else [])
         disease_data = dict(cursor.fetchall())
 
         # Daily detections for charts
-        cursor.execute("""
-            SELECT DATE(DateTime) as date, COUNT(*) as count
-            FROM disease_detections
-            WHERE DateTime >= date('now', '-30 days')
-            GROUP BY DATE(DateTime)
-            ORDER BY date
-        """)
+        if user_id:
+            cursor.execute(
+                """
+                SELECT DATE(DateTime) as date, COUNT(*) as count
+                FROM disease_detections
+                WHERE DateTime >= date('now', '-30 days') AND user_id = ?
+                GROUP BY DATE(DateTime)
+                ORDER BY date
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("""
+                SELECT DATE(DateTime) as date, COUNT(*) as count
+                FROM disease_detections
+                WHERE DateTime >= date('now', '-30 days')
+                GROUP BY DATE(DateTime)
+                ORDER BY date
+                """)
         daily_detections = [
             {"date": row[0], "count": row[1]} for row in cursor.fetchall()
         ]
@@ -921,6 +1174,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         location: str = "Field",
         season: Optional[str] = None,
         upload_type: str = "image",
+        user_id: str = "default_user",
     ) -> int:
         """Insert a new yield prediction record and return its id"""
         conn = sqlite3.connect(self.db_path)
@@ -932,10 +1186,18 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             season = f"{d.year} Q{q}"
         cursor.execute(
             """
-            INSERT INTO yield_predictions (predicted_yield, prediction_date, season, location, model_version, upload_type)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO yield_predictions (predicted_yield, prediction_date, season, location, model_version, user_id, upload_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
-            (predicted_yield, now, season, location, "v1.0", upload_type),
+            (
+                predicted_yield,
+                now,
+                season,
+                location,
+                "v1.0",
+                user_id or "default_user",
+                upload_type,
+            ),
         )
         new_id = cursor.lastrowid
         conn.commit()
@@ -944,15 +1206,21 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             raise RuntimeError("Failed to save yield prediction")
         return new_id
 
-    def get_all_yield_predictions(self) -> List[Dict]:
+    def get_all_yield_predictions(self, user_id: Optional[str] = None) -> List[Dict]:
         """Return all yield prediction records ordered newest first"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, predicted_yield, prediction_date, season, location, actual_yield, accuracy_score, created_at, upload_type
+        query = """
+            SELECT id, predicted_yield, prediction_date, season, location, actual_yield, accuracy_score, created_at, upload_type, user_id
             FROM yield_predictions
-            ORDER BY prediction_date DESC
-        """)
+        """
+        params = []
+        if user_id:
+            query += " WHERE user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY prediction_date DESC"
+
+        cursor.execute(query, params)
         rows = cursor.fetchall()
         conn.close()
         return [
@@ -966,6 +1234,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
                 "accuracy_score": r[6],
                 "created_at": r[7],
                 "upload_type": r[8] if len(r) > 8 else "image",
+                "user_id": r[9] if len(r) > 9 else "default_user",
             }
             for r in rows
         ]
@@ -980,77 +1249,148 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         conn.close()
         return deleted
 
-    def get_yield_statistics(self) -> Dict:
+    def get_yield_statistics(self, user_id: Optional[str] = None) -> Dict:
         """Get yield prediction statistics"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         # Total predictions
-        cursor.execute("SELECT COUNT(*) FROM yield_predictions")
+        if user_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM yield_predictions WHERE user_id = ?", [user_id]
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) FROM yield_predictions")
         total_predictions = cursor.fetchone()[0]
 
         # Average accuracy
-        cursor.execute("""
-            SELECT AVG(accuracy_score) as avg_accuracy
-            FROM yield_predictions 
-            WHERE actual_yield IS NOT NULL
-        """)
+        if user_id:
+            cursor.execute(
+                """
+                SELECT AVG(accuracy_score) as avg_accuracy
+                FROM yield_predictions 
+                WHERE actual_yield IS NOT NULL AND user_id = ?
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("""
+                SELECT AVG(accuracy_score) as avg_accuracy
+                FROM yield_predictions 
+                WHERE actual_yield IS NOT NULL
+                """)
         avg_accuracy = cursor.fetchone()[0] or 0
 
         # Average confidence from disease detections (0–1 float → multiply by 100 for %)
-        cursor.execute(
-            "SELECT AVG(Confidence) FROM disease_detections WHERE Confidence IS NOT NULL"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT AVG(Confidence) FROM disease_detections WHERE Confidence IS NOT NULL AND user_id = ?",
+                [user_id],
+            )
+        else:
+            cursor.execute(
+                "SELECT AVG(Confidence) FROM disease_detections WHERE Confidence IS NOT NULL"
+            )
         avg_confidence_raw = cursor.fetchone()[0] or 0
         avg_confidence = avg_confidence_raw  # stored as 0–1; API will multiply by 100
 
         # Total fruits detected (sum of predicted_yield across all yield records)
-        cursor.execute(
-            "SELECT COALESCE(SUM(predicted_yield), 0) FROM yield_predictions"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT COALESCE(SUM(predicted_yield), 0) FROM yield_predictions WHERE user_id = ?",
+                [user_id],
+            )
+        else:
+            cursor.execute(
+                "SELECT COALESCE(SUM(predicted_yield), 0) FROM yield_predictions"
+            )
         total_fruits = int(cursor.fetchone()[0] or 0)
 
         # High severity cases from disease detections
-        cursor.execute(
-            "SELECT COUNT(*) FROM disease_detections WHERE Severity = 'high'"
-        )
+        if user_id:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE Severity = 'high' AND user_id = ?",
+                [user_id],
+            )
+        else:
+            cursor.execute(
+                "SELECT COUNT(*) FROM disease_detections WHERE Severity = 'high'"
+            )
         high_severity_cases = cursor.fetchone()[0]
 
         # Yield trend for charts
-        cursor.execute("""
-            SELECT DATE(prediction_date) as date, 
-                   AVG(predicted_yield) as avg_predicted,
-                   AVG(actual_yield) as avg_actual
-            FROM yield_predictions 
-            WHERE prediction_date >= date('now', '-90 days')
-            GROUP BY DATE(prediction_date)
-            ORDER BY date
-        """)
+        if user_id:
+            cursor.execute(
+                """
+                SELECT DATE(prediction_date) as date, 
+                       AVG(predicted_yield) as avg_predicted,
+                       AVG(actual_yield) as avg_actual
+                FROM yield_predictions 
+                WHERE prediction_date >= date('now', '-90 days') AND user_id = ?
+                GROUP BY DATE(prediction_date)
+                ORDER BY date
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("""
+                SELECT DATE(prediction_date) as date, 
+                       AVG(predicted_yield) as avg_predicted,
+                       AVG(actual_yield) as avg_actual
+                FROM yield_predictions 
+                WHERE prediction_date >= date('now', '-90 days')
+                GROUP BY DATE(prediction_date)
+                ORDER BY date
+                """)
         yield_trend = [
             {"date": row[0], "predicted": row[1], "actual": row[2]}
             for row in cursor.fetchall()
         ]
 
         # Location / block yields
-        cursor.execute("""
-            SELECT location, SUM(predicted_yield) as total_yield
-            FROM yield_predictions
-            WHERE location IS NOT NULL AND location != ''
-            GROUP BY location
-            ORDER BY location
-        """)
+        if user_id:
+            cursor.execute(
+                """
+                SELECT location, SUM(predicted_yield) as total_yield
+                FROM yield_predictions
+                WHERE location IS NOT NULL AND location != '' AND user_id = ?
+                GROUP BY location
+                ORDER BY location
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("""
+                SELECT location, SUM(predicted_yield) as total_yield
+                FROM yield_predictions
+                WHERE location IS NOT NULL AND location != ''
+                GROUP BY location
+                ORDER BY location
+                """)
         location_yields = [
             {"location": row[0], "avg_predicted": row[1]} for row in cursor.fetchall()
         ]
 
         # Seasonal yields
-        cursor.execute("""
-            SELECT season, SUM(predicted_yield) as total_yield
-            FROM yield_predictions
-            WHERE season IS NOT NULL AND season != ''
-            GROUP BY season
-            ORDER BY season
-        """)
+        if user_id:
+            cursor.execute(
+                """
+                SELECT season, SUM(predicted_yield) as total_yield
+                FROM yield_predictions
+                WHERE season IS NOT NULL AND season != '' AND user_id = ?
+                GROUP BY season
+                ORDER BY season
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("""
+                SELECT season, SUM(predicted_yield) as total_yield
+                FROM yield_predictions
+                WHERE season IS NOT NULL AND season != ''
+                GROUP BY season
+                ORDER BY season
+                """)
         seasonal_yields = [
             {"season": row[0], "avg_predicted": row[1]} for row in cursor.fetchall()
         ]
@@ -1073,12 +1413,23 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             },
         }
 
-    def get_unread_alert_count(self) -> int:
+    def get_unread_alert_count(self, user_id: Optional[str] = None) -> int:
         """Get count of unread alerts"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        cursor.execute("SELECT COUNT(*) FROM alerts WHERE Status = 'Unread'")
+        if user_id:
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                FROM alerts a
+                JOIN disease_detections d ON a.DetectionID = d.DetectionID
+                WHERE a.Status = 'Unread' AND d.user_id = ?
+                """,
+                [user_id],
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) FROM alerts WHERE Status = 'Unread'")
         count = cursor.fetchone()[0]
 
         conn.close()
@@ -1170,7 +1521,7 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             SELECT strftime('%Y-%m', DateTime) as month, COUNT(*) as count
             FROM disease_detections
             WHERE DateTime >= date('now', '-6 months')
-            GROUP BY strftime('%Y-%m', DateTime)
+            GROUP BY month
             ORDER BY month DESC
         """)
         monthly_trends = dict(cursor.fetchall())
@@ -1183,6 +1534,490 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             "severity_counts": severity_counts,
             "recent_detections": recent_detections,
             "monthly_trends": monthly_trends,
+        }
+
+    # ========== ADMIN: USER MANAGEMENT METHODS ==========
+
+    def create_user(
+        self,
+        username: str,
+        password: str,
+        email: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        role: str = "user",
+        status: str = "active",
+    ) -> int:
+        """Create a new user"""
+        import hashlib
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+
+        cursor.execute(
+            """
+            INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+            (username, password_hash, email, first_name, last_name, role, status),
+        )
+
+        user_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return user_id
+
+    def get_all_users(self) -> List[Dict]:
+        """Get all users"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT UserID, Username, Email, FirstName, LastName, Role, Status, CreatedAt, LastLogin
+            FROM users
+            ORDER BY CreatedAt DESC
+        """)
+
+        users = []
+        for row in cursor.fetchall():
+            users.append(
+                {
+                    "UserID": row[0],
+                    "Username": row[1],
+                    "Email": row[2],
+                    "FirstName": row[3],
+                    "LastName": row[4],
+                    "Role": row[5],
+                    "Status": row[6],
+                    "CreatedAt": row[7],
+                    "LastLogin": row[8],
+                }
+            )
+
+        conn.close()
+        return users
+
+    def get_user_by_id(self, user_id: int) -> Optional[Dict]:
+        """Get user by ID"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT UserID, Username, Email, FirstName, LastName, Role, Status, CreatedAt, LastLogin
+            FROM users
+            WHERE UserID = ?
+        """,
+            (user_id,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "UserID": row[0],
+                "Username": row[1],
+                "Email": row[2],
+                "FirstName": row[3],
+                "LastName": row[4],
+                "Role": row[5],
+                "Status": row[6],
+                "CreatedAt": row[7],
+                "LastLogin": row[8],
+            }
+        return None
+
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        """Get user record by username (any status)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT UserID, Username, Email, FirstName, LastName, Role, Status, PasswordHash, CreatedAt, LastLogin
+            FROM users
+            WHERE Username = ?
+        """,
+            (username,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "UserID": row[0],
+                "Username": row[1],
+                "Email": row[2],
+                "FirstName": row[3],
+                "LastName": row[4],
+                "Role": row[5],
+                "Status": row[6],
+                "PasswordHash": row[7],
+                "CreatedAt": row[8],
+                "LastLogin": row[9],
+            }
+        return None
+
+    def get_user_by_email(self, email: str) -> Optional[Dict]:
+        """Get user record by email (any status)"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT UserID, Username, Email, FirstName, LastName, Role, Status, PasswordHash, CreatedAt, LastLogin
+            FROM users
+            WHERE Email = ?
+        """,
+            (email,),
+        )
+
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "UserID": row[0],
+                "Username": row[1],
+                "Email": row[2],
+                "FirstName": row[3],
+                "LastName": row[4],
+                "Role": row[5],
+                "Status": row[6],
+                "PasswordHash": row[7],
+                "CreatedAt": row[8],
+                "LastLogin": row[9],
+            }
+        return None
+
+    def update_user(
+        self,
+        user_id: int,
+        email: Optional[str] = None,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        role: Optional[str] = None,
+        status: Optional[str] = None,
+        password: Optional[str] = None,
+    ) -> bool:
+        """Update user information"""
+        import hashlib
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        updates = []
+        params = []
+
+        if email is not None:
+            updates.append("Email = ?")
+            params.append(email)
+        if first_name is not None:
+            updates.append("FirstName = ?")
+            params.append(first_name)
+        if last_name is not None:
+            updates.append("LastName = ?")
+            params.append(last_name)
+        if role is not None:
+            updates.append("Role = ?")
+            params.append(role)
+        if status is not None:
+            updates.append("Status = ?")
+            params.append(status)
+        if password is not None:
+            updates.append("PasswordHash = ?")
+            params.append(hashlib.sha256(password.encode()).hexdigest())
+
+        if not updates:
+            conn.close()
+            return False
+
+        updates.append("UpdatedAt = ?")
+        params.append(datetime.now().isoformat())
+        params.append(user_id)
+
+        cursor.execute(
+            f"UPDATE users SET {', '.join(updates)} WHERE UserID = ?", params
+        )
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return success
+
+    def delete_user(self, user_id: int) -> bool:
+        """Delete a user"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM users WHERE UserID = ?", (user_id,))
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return success
+
+    def verify_user_credentials(self, username: str, password: str) -> Optional[Dict]:
+        """Verify user credentials for login"""
+        import hashlib
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        password_hash = hashlib.sha256(password.encode()).hexdigest()
+
+        cursor.execute(
+            """
+            SELECT UserID, Username, Email, FirstName, LastName, Role, Status
+            FROM users
+            WHERE Username = ? AND PasswordHash = ? AND Status = 'active'
+        """,
+            (username, password_hash),
+        )
+
+        row = cursor.fetchone()
+
+        if row:
+            # Update last login
+            cursor.execute(
+                "UPDATE users SET LastLogin = ? WHERE UserID = ?",
+                (datetime.now().isoformat(), row[0]),
+            )
+            conn.commit()
+
+        conn.close()
+
+        if row:
+            return {
+                "UserID": row[0],
+                "Username": row[1],
+                "Email": row[2],
+                "FirstName": row[3],
+                "LastName": row[4],
+                "Role": row[5],
+                "Status": row[6],
+            }
+        return None
+
+    # ========== ADMIN: USER LOGS METHODS ==========
+
+    def create_user_log(
+        self,
+        user_id: Optional[int],
+        action: str,
+        description: Optional[str] = None,
+        ip_address: Optional[str] = None,
+        user_agent: Optional[str] = None,
+    ) -> int:
+        """Create a user log entry"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            INSERT INTO user_logs (UserID, Action, Description, IPAddress, UserAgent)
+            VALUES (?, ?, ?, ?, ?)
+        """,
+            (user_id, action, description, ip_address, user_agent),
+        )
+
+        log_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+
+        return log_id
+
+    def get_all_user_logs(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        user_id: Optional[int] = None,
+        action: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict]:
+        """Get user logs with optional filters"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT ul.LogID, ul.UserID, u.Username, ul.Action, ul.Description, 
+                   ul.IPAddress, ul.UserAgent, ul.CreatedAt
+            FROM user_logs ul
+            LEFT JOIN users u ON ul.UserID = u.UserID
+            WHERE 1=1
+        """
+        params = []
+
+        if start_date:
+            query += " AND ul.CreatedAt >= ?"
+            params.append(start_date)
+        if end_date:
+            query += " AND ul.CreatedAt <= ?"
+            params.append(end_date)
+        if user_id:
+            query += " AND ul.UserID = ?"
+            params.append(user_id)
+        if action:
+            query += " AND ul.Action LIKE ?"
+            params.append(f"%{action}%")
+
+        query += " ORDER BY ul.CreatedAt DESC LIMIT ?"
+        params.append(limit)
+
+        cursor.execute(query, params)
+
+        logs = []
+        for row in cursor.fetchall():
+            logs.append(
+                {
+                    "LogID": row[0],
+                    "UserID": row[1],
+                    "Username": row[2],
+                    "Action": row[3],
+                    "Description": row[4],
+                    "IPAddress": row[5],
+                    "UserAgent": row[6],
+                    "CreatedAt": row[7],
+                }
+            )
+
+        conn.close()
+        return logs
+
+    # ========== ADMIN: SITE SETTINGS METHODS ==========
+
+    def get_site_settings(self, category: Optional[str] = None) -> List[Dict]:
+        """Get all site settings, optionally filtered by category"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        if category:
+            cursor.execute(
+                """
+                SELECT SettingID, SettingKey, SettingValue, SettingType, Category, Description, UpdatedAt
+                FROM site_settings
+                WHERE Category = ?
+                ORDER BY Category, SettingKey
+            """,
+                (category,),
+            )
+        else:
+            cursor.execute("""
+                SELECT SettingID, SettingKey, SettingValue, SettingType, Category, Description, UpdatedAt
+                FROM site_settings
+                ORDER BY Category, SettingKey
+            """)
+
+        settings = []
+        for row in cursor.fetchall():
+            settings.append(
+                {
+                    "SettingID": row[0],
+                    "SettingKey": row[1],
+                    "SettingValue": row[2],
+                    "SettingType": row[3],
+                    "Category": row[4],
+                    "Description": row[5],
+                    "UpdatedAt": row[6],
+                }
+            )
+
+        conn.close()
+        return settings
+
+    def update_site_setting(
+        self, setting_key: str, setting_value: str, updated_by: Optional[int] = None
+    ) -> bool:
+        """Update a site setting"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            UPDATE site_settings
+            SET SettingValue = ?, UpdatedAt = ?, UpdatedBy = ?
+            WHERE SettingKey = ?
+        """,
+            (setting_value, datetime.now().isoformat(), updated_by, setting_key),
+        )
+
+        success = cursor.rowcount > 0
+        conn.commit()
+        conn.close()
+
+        return success
+
+    def get_admin_dashboard_metrics(self) -> Dict:
+        """Get comprehensive metrics for admin dashboard"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # User statistics
+        cursor.execute("SELECT COUNT(*) FROM users WHERE Status = 'active'")
+        active_users = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM users WHERE Role = 'admin'")
+        admin_count = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+
+        # Disease detection statistics
+        cursor.execute("SELECT COUNT(*) FROM disease_detections")
+        total_detections = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COUNT(*) FROM disease_detections WHERE DateTime >= date('now', '-7 days')"
+        )
+        weekly_detections = cursor.fetchone()[0]
+
+        # Yield statistics
+        cursor.execute("SELECT COUNT(*) FROM yield_predictions")
+        total_yield_predictions = cursor.fetchone()[0]
+
+        cursor.execute(
+            "SELECT COALESCE(SUM(predicted_yield), 0) FROM yield_predictions"
+        )
+        total_fruits_detected = cursor.fetchone()[0]
+
+        # Alert statistics
+        cursor.execute("SELECT COUNT(*) FROM alerts WHERE Status = 'Unread'")
+        unread_alerts = cursor.fetchone()[0]
+
+        # Recent activity
+        cursor.execute(
+            "SELECT COUNT(*) FROM user_logs WHERE CreatedAt >= date('now', '-7 days')"
+        )
+        weekly_activity = cursor.fetchone()[0]
+
+        conn.close()
+
+        return {
+            "users": {
+                "total": total_users,
+                "active": active_users,
+                "admins": admin_count,
+            },
+            "detections": {
+                "total": total_detections,
+                "weekly": weekly_detections,
+            },
+            "yield": {
+                "total_predictions": total_yield_predictions,
+                "total_fruits": total_fruits_detected,
+            },
+            "alerts": {
+                "unread": unread_alerts,
+            },
+            "activity": {
+                "weekly_logs": weekly_activity,
+            },
         }
 
     def get_disease_library_data(self) -> List[Dict]:

@@ -3,9 +3,14 @@
  * that the Yield Report page uses (/api/dashboard/yield-predictions).
  * Values are raw fruit counts — matching the Yield Report "Fruits Detected" column exactly.
  */
+import { getPitayaUserScopeHeaders } from './userScope'
+
 export async function fetchYield() {
   try {
-    const res = await fetch('/api/dashboard/yield-predictions', { credentials: 'include' })
+    const res = await fetch('/api/dashboard/yield-predictions', {
+      credentials: 'include',
+      headers: getPitayaUserScopeHeaders(),
+    })
     if (!res.ok) throw new Error(res.statusText)
     const root = await res.json()
     const records = root.data || []

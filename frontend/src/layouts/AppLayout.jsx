@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import {
+    AlertTriangle,
     Bell,
     BookOpen,
     FileText,
@@ -48,6 +49,7 @@ export default function AppLayout() {
   const navigate = useNavigate()
   const [darkMode, setDarkMode] = useState(false)
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [confirmLogout, setConfirmLogout] = useState(false)
   const pageTitle = getPageTitle(location.pathname)
 
   const logoUrl = `${import.meta.env.BASE_URL}logoCaps.png`
@@ -59,7 +61,12 @@ export default function AppLayout() {
 
   const handleLogout = () => {
     setMobileMenuOpen(false)
+    setConfirmLogout(true)
+  }
+
+  const confirmLogoutAction = () => {
     localStorage.removeItem('pitayaUser')
+    setConfirmLogout(false)
     navigate('/landing', { replace: true })
   }
 
@@ -206,6 +213,51 @@ export default function AppLayout() {
           </motion.div>
         </main>
       </div>
+
+      {/* Logout Confirmation Modal */}
+      {confirmLogout && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-[60] animate-in fade-in duration-200">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl max-w-md w-full shadow-2xl animate-in slide-in-from-bottom-4 duration-300">
+            <div className="p-6">
+              {/* Header */}
+              <div className="flex items-center gap-4 mb-6">
+                <div className="w-14 h-14 rounded-full bg-gradient-to-br from-amber-100 to-amber-200 dark:from-amber-900/40 dark:to-amber-800/30 flex items-center justify-center shrink-0 shadow-sm">
+                  <LogOut className="w-7 h-7 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <h3 className="text-xl font-bold text-gray-900 dark:text-gray-100">Logout</h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Are you sure you want to logout?</p>
+                </div>
+              </div>
+
+              {/* Warning Message */}
+              <div className="flex items-start gap-3 mb-6 p-4 bg-amber-50 dark:bg-amber-900/20 rounded-lg border border-amber-200 dark:border-amber-800">
+                <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  You will be logged out and redirected to the landing page.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setConfirmLogout(false)}
+                  className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all duration-200 font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmLogoutAction}
+                  className="flex-1 px-4 py-3 rounded-xl bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white font-semibold transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Logout
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

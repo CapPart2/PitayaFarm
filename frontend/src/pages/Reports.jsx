@@ -48,7 +48,11 @@ export default function Reports({ initialTab = 'disease' }) {
       </div>
 
       <div>
-        {activeTab === 'yield' ? <YieldReport /> : <ReportsModule />}
+        {activeTab === 'yield' ? (
+          <YieldReport />
+        ) : (
+          <ReportsModule />
+        )}
       </div>
     </div>
   )

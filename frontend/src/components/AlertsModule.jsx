@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { libraryApi } from '../api/client';
+import { getPitayaUserScopeHeaders } from '../api/userScope';
 import LoadingSpinner from './LoadingSpinner';
 
 const HISTORY_KEY = 'pitaya.alerts.history.v1';
@@ -248,7 +249,7 @@ export default function AlertsModule() {
 
   const fetchUnreadCount = async () => {
     try {
-      const response = await fetch('/api/dashboard/alerts/unread-count');
+      const response = await fetch('/api/dashboard/alerts/unread-count', { headers: getPitayaUserScopeHeaders() });
       const data = await response.json();
       if (data?.success) setUnreadCount(data.data.count || 0);
     } catch {
@@ -258,9 +259,10 @@ export default function AlertsModule() {
 
   const fetchAlerts = async () => {
     try {
+      const scopeHeaders = { headers: getPitayaUserScopeHeaders() };
       const [allResponse, unreadResponse] = await Promise.all([
-        fetch('/api/dashboard/alerts'),
-        fetch('/api/dashboard/alerts?unread_only=true'),
+        fetch('/api/dashboard/alerts', scopeHeaders),
+        fetch('/api/dashboard/alerts?unread_only=true', scopeHeaders),
       ]);
 
       const allRoot = await allResponse.json();
@@ -353,7 +355,7 @@ export default function AlertsModule() {
 
   const markAsReadOnServer = async (alertKey) => {
     try {
-      await fetch(`/api/dashboard/alerts/${encodeURIComponent(alertKey)}/read`, { method: 'POST' });
+      await fetch(`/api/dashboard/alerts/${encodeURIComponent(alertKey)}/read`, { method: 'POST', headers: getPitayaUserScopeHeaders() });
     } catch {
       // ignore
     }

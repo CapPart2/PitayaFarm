@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom'
 import { X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { getPitayaUserScopeHeaders } from '../api/userScope'
 import LoadingSpinner from '../components/LoadingSpinner'
 
 export default function DetectionDetails() {
@@ -13,7 +14,9 @@ export default function DetectionDetails() {
   useEffect(() => {
     const fetchDetection = async () => {
       try {
-        const res = await fetch(`/api/dashboard/detections/${id}`)
+        const res = await fetch(`/api/dashboard/detections/${id}`, {
+          headers: getPitayaUserScopeHeaders(),
+        })
         if (!res.ok) {
           console.error(`Detection fetch failed: ${res.status}`)
           setData(null)
@@ -35,7 +38,7 @@ export default function DetectionDetails() {
   useEffect(() => {
     const alertId = searchParams.get('alertId')
     if (alertId) {
-      fetch(`/api/dashboard/alerts/${alertId}/read`, { method: 'POST' }).catch(() => {})
+      fetch(`/api/dashboard/alerts/${alertId}/read`, { method: 'POST', headers: getPitayaUserScopeHeaders() }).catch(() => {})
       window.dispatchEvent(new Event('pitaya:refresh'))
     }
   }, [searchParams])
@@ -108,6 +111,17 @@ export default function DetectionDetails() {
           <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">{data.image_path ? 'Available' : 'Not Available'}</p>
         </div>
       </div>
+
+      {(data.image_url || data.image_path) && (
+        <div className="mt-6 p-4 bg-gray-50 dark:bg-gray-700 rounded-lg">
+          <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">Uploaded Image</p>
+          <img
+            src={data.image_url || data.image_path}
+            alt="Uploaded disease detection"
+            className="w-full max-h-[420px] object-contain rounded-lg border border-gray-200 dark:border-gray-600 bg-white"
+          />
+        </div>
+      )}
       
       {/* Alert Information */}
       {data.alert && (

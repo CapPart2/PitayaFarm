@@ -26,23 +26,32 @@ export default function Report() {
     };
   };
 
+  const fetchReportData = async (range = timeRange) => {
+    try {
+      setLoading(true);
+      const { startDate, endDate } = getDateRange(range);
+      const data = await reportsApi.getReportData(startDate, endDate);
+      setReportData(data);
+      setError(null);
+    } catch (err) {
+      console.error('Error fetching report data:', err);
+      setError('Failed to load report data. Please try again later.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    const fetchReportData = async () => {
-      try {
-        setLoading(true);
-        const { startDate, endDate } = getDateRange(timeRange);
-        const data = await reportsApi.getReportData(startDate, endDate);
-        setReportData(data);
-        setError(null);
-      } catch (err) {
-        console.error('Error fetching report data:', err);
-        setError('Failed to load report data. Please try again later.');
-      } finally {
-        setLoading(false);
-      }
+    fetchReportData();
+  }, [timeRange]);
+
+  useEffect(() => {
+    const handleRefresh = () => {
+      fetchReportData();
     };
 
-    fetchReportData();
+    window.addEventListener('pitaya:refresh', handleRefresh);
+    return () => window.removeEventListener('pitaya:refresh', handleRefresh);
   }, [timeRange]);
 
   if (loading) {

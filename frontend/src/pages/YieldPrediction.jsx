@@ -22,6 +22,36 @@ const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }
 
 const CHART_COLORS = { line: '#2f6a21', bar: '#3c7b2b', barAlt: '#6bb854' }
 
+const DASHBOARD_MEDIA_ORIGIN = (() => {
+  const configuredBase =
+    import.meta.env.VITE_DASHBOARD_MEDIA_ORIGIN ||
+    import.meta.env.VITE_DASHBOARD_API_BASE ||
+    import.meta.env.VITE_DASHBOARD_API_BASE_URL ||
+    'http://192.168.1.59:5001'
+
+  const normalized = String(configuredBase).replace(/\/api\/dashboard\/?$/, '')
+
+  if (typeof window !== 'undefined' && window.location.protocol === 'https:' && normalized.startsWith('http://')) {
+    return normalized.replace(/^http:\/\//, 'https://')
+  }
+
+  return normalized
+})()
+
+function resolveDashboardMediaUrl(mediaPath) {
+  if (!mediaPath) return ''
+
+  const path = String(mediaPath)
+  if (/^https?:\/\//i.test(path)) {
+    if (typeof window !== 'undefined' && window.location.protocol === 'https:' && path.startsWith('http://')) {
+      return path.replace(/^http:\/\//i, 'https://')
+    }
+    return path
+  }
+
+  return `${DASHBOARD_MEDIA_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
 export default function YieldPrediction() {
   const [loading, setLoading] = useState(true)
   const [datasetKey, setDatasetKey] = useState('estimation')
@@ -68,6 +98,7 @@ export default function YieldPrediction() {
   const [savingToChart, setSavingToChart] = useState(false)
   const [savedMessage, setSavedMessage] = useState(null)
   const [blockName, setBlockName] = useState('Field A')
+  const autoSavedKeysRef = useRef(new Set())
 
   // Load/refresh chart data from API
   const loadChartData = async (showSpinner = false) => {
@@ -134,6 +165,9 @@ export default function YieldPrediction() {
       const resp = await uploadYieldVideo(file, 0.25)
       if (resp && resp.success) {
         setVideoCountResult(resp.data)
+        const detectedFruits = Number(resp?.data?.total_fruits ?? resp?.data?.total_mature_fruits ?? 0)
+        const autoKey = `video:${resp?.data?.annotated_video_url || file.name}:${detectedFruits}`
+        await handleSaveToChart(detectedFruits, 'video', { silent: true, dedupeKey: autoKey })
         // Refresh charts with new data
         loadChartData(true)
       } else {
@@ -242,9 +276,9 @@ export default function YieldPrediction() {
           if (!resp || !resp.success) return
 
           const detections = Array.isArray(resp.data?.detections) ? resp.data.detections : []
-          const matureDetections = detections.filter((d) => String(d?.label || '').toLowerCase() === 'mature' && Array.isArray(d?.box) && d.box.length === 4)
-          setLiveFrameMatureCount(matureDetections.length)
-          setLiveDetections(matureDetections)
+          const validDetections = detections.filter((d) => Array.isArray(d?.box) && d.box.length === 4)
+          setLiveFrameMatureCount(validDetections.length)
+          setLiveDetections(validDetections)
 
           // --- Lightweight tracker to avoid double counting across frames ---
           // Each detection becomes a centroid point; if it matches an existing track (within a distance threshold)
@@ -256,7 +290,7 @@ export default function YieldPrediction() {
           const usedTrackIds = new Set()
           let newlyCounted = 0
 
-          for (const det of matureDetections) {
+          for (const det of validDetections) {
             const [x1, y1, x2, y2] = det.box
             const cx = (x1 + x2) / 2
             const cy = (y1 + y2) / 2
@@ -291,7 +325,7 @@ export default function YieldPrediction() {
           liveTracksRef.current = tracks.filter((t) => now - t.lastSeen <= 2000)
 
           if (newlyCounted > 0) {
-            console.log(`🍓 Detected ${newlyCounted} new mature fruits! Total now:`, liveSessionTotal + newlyCounted)
+            console.log(`🍓 Detected ${newlyCounted} new fruits! Total now:`, liveSessionTotal + newlyCounted)
             setLiveSessionTotal((v) => {
               const newVal = v + newlyCounted
               console.log(`📊 State updated: ${v} + ${newlyCounted} = ${newVal}`)
@@ -349,7 +383,7 @@ export default function YieldPrediction() {
           ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
           
           // Label with confidence
-          const label = `MATURE ${(det.confidence * 100).toFixed(0)}%`
+          const label = `FRUIT ${(det.confidence * 100).toFixed(0)}%`
           ctx.fillStyle = '#0066FF'
           ctx.font = 'bold 14px sans-serif'
           ctx.fillRect(x1, Math.max(0, y1 - 25), ctx.measureText(label).width + 8, 25)
@@ -368,6 +402,9 @@ export default function YieldPrediction() {
       const resp = await uploadYieldImage(file, 0.25)
       if (resp && resp.success) {
         setDetectionResult(resp.data)
+        const fruitCount = Number(resp.data?.detections?.length || 0)
+        const autoKey = `image:${resp?.data?.annotated_image || file.name}:${fruitCount}`
+        await handleSaveToChart(fruitCount, 'image', { silent: true, dedupeKey: autoKey })
       } else {
         console.warn('Detection failed', resp)
       }
@@ -378,24 +415,38 @@ export default function YieldPrediction() {
     }
   }
 
-  const handleSaveToChart = async (matureFruits, uploadType = 'image') => {
+  const handleSaveToChart = async (matureFruits, uploadType = 'image', options = {}) => {
+    const { silent = false, dedupeKey = null } = options
+    if (dedupeKey && autoSavedKeysRef.current.has(dedupeKey)) return
+
+    const fruits = Number(matureFruits) || 0
+    if (fruits <= 0) return
+
     setSavingToChart(true)
     setSavedMessage(null)
     const location = blockName.trim() || 'Field A'
     try {
-      console.log(`💾 Saving ${matureFruits} fruits to yield report (Location: ${location}, Type: ${uploadType})`)
-      const resp = await saveYieldToChart(matureFruits, location, null, uploadType)
+      console.log(`Saving ${fruits} fruits to yield report (Location: ${location}, Type: ${uploadType})`)
+      const resp = await saveYieldToChart(fruits, location, null, uploadType)
       if (resp && resp.success) {
-        setSavedMessage({ type: 'success', text: `✅ Saved ${matureFruits} fruits (${location}) to chart!` })
-        console.log('✅ Successfully saved to yield report')
+        if (dedupeKey) autoSavedKeysRef.current.add(dedupeKey)
+        if (!silent) {
+          setSavedMessage({ type: 'success', text: `✅ Saved ${fruits} fruits (${location}) to chart!` })
+        }
+        console.log('Successfully saved to yield report')
         loadChartData(true)
+        window.dispatchEvent(new Event('pitaya:refresh'))
       } else {
-        setSavedMessage({ type: 'error', text: `❌ Failed to save: ${resp?.error || 'Unknown error'}` })
-        console.error('❌ Save failed:', resp?.error)
+        if (!silent) {
+          setSavedMessage({ type: 'error', text: `❌ Failed to save: ${resp?.error || 'Unknown error'}` })
+        }
+        console.error('Save failed:', resp?.error)
       }
     } catch (err) {
-      setSavedMessage({ type: 'error', text: `❌ Error: ${err.message}` })
-      console.error('❌ Save error:', err)
+      if (!silent) {
+        setSavedMessage({ type: 'error', text: `❌ Error: ${err.message}` })
+      }
+      console.error('Save error:', err)
     } finally {
       setSavingToChart(false)
     }
@@ -451,6 +502,9 @@ export default function YieldPrediction() {
             </label>
             {videoUploading && <span className="text-sm text-gray-500 dark:text-gray-400">Processing video… this may take a few seconds.</span>}
           </div>
+          <p className="-mt-2 mb-4 text-xs text-gray-500 dark:text-gray-400">
+            Upload the original camera video only. Downloaded annotated results are for review and cannot be counted again.
+          </p>
 
           
 
@@ -508,7 +562,7 @@ export default function YieldPrediction() {
                 </div>
                 <div className="mt-2 space-y-1 text-sm text-gray-700 dark:text-gray-200">
                   <div className="flex items-center justify-between">
-                    <span>Current frame (mature fruits)</span>
+                    <span>Current frame (fruits)</span>
                     <span className="font-semibold text-pitaya-primary">{liveFrameMatureCount}</span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -596,11 +650,11 @@ export default function YieldPrediction() {
                     ))}
                   </ul>
                   {(() => {
-                    const matureCount = detectionResult.detections.filter(d => d.label === 'MATURE').length
+                    const fruitCount = detectionResult.detections.length
                     return (
                       <div className="border-t pt-3 space-y-2">
                         <p className="text-xs text-gray-500 dark:text-gray-400">
-                          Mature fruits detected: <span className="font-semibold text-pitaya-primary">{matureCount}</span>
+                          Fruits detected: <span className="font-semibold text-pitaya-primary">{fruitCount}</span>
                         </p>
                         <div className="flex flex-col gap-1">
                           <label className="text-xs text-gray-500 dark:text-gray-400 font-medium">Block / Location</label>
@@ -614,14 +668,14 @@ export default function YieldPrediction() {
                         </div>
                         <button
                           type="button"
-                          disabled={savingToChart || matureCount === 0}
-                          onClick={() => handleSaveToChart(matureCount, 'image')}
+                          disabled={savingToChart || fruitCount === 0}
+                          onClick={() => handleSaveToChart(fruitCount, 'image')}
                           className="w-full min-h-[38px] px-4 rounded-lg bg-pitaya-primary text-white text-sm font-medium hover:bg-pitaya-leaf disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
                         >
                           {savingToChart ? (
                             <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
                           ) : (
-                            <>📊 Save {matureCount} fruits to Chart</>
+                            <>📊 Save {fruitCount} fruits to Chart</>
                           )}
                         </button>
                         {savedMessage && (
@@ -649,8 +703,8 @@ export default function YieldPrediction() {
             {!videoUploading && videoCountResult && !videoError && (
               <>
                 <p className="text-sm text-gray-700 dark:text-gray-200 mb-2">
-                  Total mature fruits detected in the uploaded video:{' '}
-                  <span className="font-semibold text-pitaya-primary">{videoCountResult.total_mature_fruits}</span>
+                  Total fruits detected in the uploaded video:{' '}
+                  <span className="font-semibold text-pitaya-primary">{Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0)}</span>
                   {videoCountResult.frame_count ? ` (processed ${videoCountResult.frame_count} frames)` : ''}.
                 </p>
                 <div className="flex flex-col gap-1 mb-2">
@@ -666,13 +720,13 @@ export default function YieldPrediction() {
                 <button
                   type="button"
                   disabled={savingToChart}
-                  onClick={() => handleSaveToChart(videoCountResult.total_mature_fruits, 'video')}
+                  onClick={() => handleSaveToChart(Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0), 'video')}
                   className="mb-3 min-h-[38px] px-4 rounded-lg bg-pitaya-primary text-white text-sm font-medium hover:bg-pitaya-leaf disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                 >
                   {savingToChart ? (
                     <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
                   ) : (
-                    <>📊 Save {videoCountResult.total_mature_fruits} fruits to Chart</>
+                    <>📊 Save {Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0)} fruits to Chart</>
                   )}
                 </button>
                 {savedMessage && (
@@ -689,7 +743,7 @@ export default function YieldPrediction() {
                       className="w-full max-h-64 rounded-lg border border-gray-300 dark:border-gray-700 bg-black"
                       controls
                       controlsList="nodownload"
-                      src={`http://192.168.1.59:5001${videoCountResult.original_video_url}`}
+                      src={resolveDashboardMediaUrl(videoCountResult.original_video_url)}
                     />
                   </div>
                 )}
@@ -702,10 +756,10 @@ export default function YieldPrediction() {
                       className="w-full max-h-64 rounded-lg border border-gray-300 dark:border-gray-700 bg-black"
                       controls
                       controlsList="nodownload"
-                      src={`http://192.168.1.59:5001${videoCountResult.annotated_video_url}`}
+                      src={resolveDashboardMediaUrl(videoCountResult.annotated_video_url)}
                     />
                     <a
-                      href={`http://192.168.1.59:5001${videoCountResult.annotated_video_url}`}
+                      href={resolveDashboardMediaUrl(videoCountResult.annotated_video_url)}
                       download
                       className="mt-2 inline-block text-xs text-pitaya-primary hover:underline"
                     >

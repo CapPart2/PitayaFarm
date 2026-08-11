@@ -2,13 +2,14 @@
 # Dashboard API Endpoints - Clean Version
 # Flask API for database-driven dashboard charts
 
-from flask import Flask, jsonify, request, send_file, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory, Response
 from flask_cors import CORS
 from datetime import datetime, timedelta
 import json
 import csv
 import io
 import os
+import sqlite3
 import uuid
 from werkzeug.utils import secure_filename
 from reportlab.lib.pagesizes import letter, A4
@@ -42,6 +43,61 @@ MODEL_PATHS = [
 ]
 
 
+def get_request_user_id(default=None):
+    user_id = (
+        request.headers.get("X-Pitaya-User")
+        or request.args.get("user_id")
+        or (request.form.get("user_id") if request.form else None)
+    )
+    if user_id:
+        return str(user_id).strip() or default
+    if default is not None:
+        return default
+
+    # Never fall back to unscoped/global reads when the caller forgot the header.
+    # A non-existent sentinel keeps queries user-scoped and returns empty results.
+    return "__missing_user_scope__"
+
+
+def migrate_legacy_user_data(target_user_id):
+    if not target_user_id:
+        return 0, 0
+
+    conn = sqlite3.connect(db_manager.db_path)
+    cursor = conn.cursor()
+
+    cursor.execute(
+        "UPDATE disease_detections SET user_id = ? WHERE user_id = 'default_user'",
+        (target_user_id,),
+    )
+    disease_count = cursor.rowcount
+
+    cursor.execute(
+        "UPDATE yield_predictions SET user_id = ? WHERE user_id = 'default_user'",
+        (target_user_id,),
+    )
+    yield_count = cursor.rowcount
+
+    conn.commit()
+    conn.close()
+    return disease_count, yield_count
+
+
+def make_uploaded_file_url(image_path):
+    if not image_path:
+        return None
+
+    relative_path = str(image_path).replace("\\", "/")
+    if relative_path.startswith("uploads/"):
+        relative_path = relative_path[len("uploads/") :]
+    elif relative_path.startswith("/uploads/"):
+        relative_path = relative_path[len("/uploads/") :]
+    elif relative_path.startswith("/"):
+        relative_path = relative_path.lstrip("/")
+
+    return f"/uploads/{relative_path}"
+
+
 def load_yolo_model():
     global MODEL
     if MODEL is not None:
@@ -66,7 +122,165 @@ def load_yolo_model():
     return MODEL
 
 
-def detect_mature_fruits_hsv(frame_bgr):
+def mature_core_ratio(frame_bgr, x: int, y: int, width: int, height: int) -> float:
+    """Return the share of a candidate occupied by the canonical ripe pink/red colour.
+
+    The wider HSV mask used for still photos intentionally includes orange highlights.
+    This second measurement stays narrow so an occluded fruit can be accepted without
+    turning sunlit grass, dry stems, or soil into an additional fruit.
+    """
+    roi = frame_bgr[y : y + height, x : x + width]
+    if roi.size == 0:
+        return 0.0
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    red_low = cv2.inRange(hsv, np.array([0, 85, 100]), np.array([12, 255, 255]))
+    red_high = cv2.inRange(hsv, np.array([145, 85, 100]), np.array([180, 255, 255]))
+    return cv2.countNonZero(cv2.bitwise_or(red_low, red_high)) / float(width * height)
+
+
+def is_hsv_fruit_candidate(
+    contour, pink_mask, frame_shape, image_mode: bool = False, frame_bgr=None
+) -> bool:
+    """Accept a substantial, compact pink/red fruit region; reject ground noise."""
+    area = float(cv2.contourArea(contour))
+    if area <= 0:
+        return False
+
+    x, y, width, height = cv2.boundingRect(contour)
+    frame_height, frame_width = frame_shape[:2]
+    frame_area = float(frame_height * frame_width)
+    box_area = float(width * height)
+    if box_area <= 0:
+        return False
+
+    # Field noise (flowers, soil specks, and shadows) is much smaller than a
+    # countable fruit. Partial objects on the edge cannot be counted reliably.
+    min_side = max(36, int(min(frame_width, frame_height) * 0.04))
+    if (
+        min(width, height) < min_side
+        or box_area < max(1800.0, frame_area * 0.0015)
+        or x <= 1
+        or y <= 1
+        or x + width >= frame_width - 1
+        or y + height >= frame_height - 1
+    ):
+        return False
+
+    # The still-image workflow photographs the canopy from above; the lowest
+    # portion is ground, the tyre, or the stand. Exclude colour-only candidates
+    # there instead of letting those objects be labelled as mature fruit.
+    if image_mode and (y + (height / 2.0)) >= frame_height * 0.82:
+        return False
+
+    extent = area / box_area
+    perimeter = float(cv2.arcLength(contour, True))
+    circularity = (4.0 * np.pi * area / (perimeter * perimeter)) if perimeter > 0 else 0.0
+    aspect_ratio = width / float(max(height, 1))
+    pink_ratio = cv2.countNonZero(pink_mask[y : y + height, x : x + width]) / box_area
+
+    mature_core = (
+        mature_core_ratio(frame_bgr, x, y, width, height)
+        if frame_bgr is not None
+        else 0.0
+    )
+    standard_shape = (
+        extent >= 0.32
+        and circularity >= 0.16
+        and 0.40 <= aspect_ratio <= 1.90
+        and pink_ratio >= 0.18
+    )
+    if standard_shape:
+        # The broad photo mask also sees orange/brown ground texture. A real
+        # mature fruit must contain at least a small amount of the canonical
+        # ripe red/pink core. This removes the grass/soil boxes in the supplied
+        # photo without removing shaded fruits on the plant.
+        if image_mode and mature_core < 0.08:
+            return False
+        return True
+
+    # A mature fruit can be split into irregular red regions when cactus arms cover
+    # it. This is common in the still image supplied by the user: the fruit body is
+    # ripe but the external contour is no longer circular. Permit that case only for
+    # photographs and only when the box has a substantial canonical ripe-colour core.
+    # The core check keeps similarly coloured soil and dried plant material rejected.
+    if not image_mode or frame_bgr is None:
+        return False
+
+    return (
+        extent >= 0.30
+        and circularity >= 0.10
+        and 0.45 <= aspect_ratio <= 1.45
+        and pink_ratio >= 0.25
+        and mature_core >= 0.14
+    )
+
+
+def detect_occluded_mature_core_boxes(frame_bgr, rejected_regions):
+    """Find individual ripe cores when leaves merge two fruits into one contour.
+
+    The normal broad-pink mask is best for full fruits. In a dense canopy, however,
+    two mature fruits can be joined to leaves and grass as one large irregular blob.
+    This stricter red/pink core pass recovers the individual fruits without accepting
+    orange soil or dry leaves, which do not contain the canonical ripe core.
+    """
+    frame_height, frame_width = frame_bgr.shape[:2]
+    frame_area = float(frame_height * frame_width)
+    hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
+    core_mask = cv2.bitwise_or(
+        cv2.inRange(hsv, np.array([0, 85, 100]), np.array([12, 255, 255])),
+        cv2.inRange(hsv, np.array([145, 85, 100]), np.array([180, 255, 255])),
+    )
+    core_mask = cv2.morphologyEx(
+        core_mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
+    )
+    contours, _ = cv2.findContours(
+        core_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+
+    min_core_area = max(400.0, frame_area * 0.00035)
+    boxes = []
+    for contour in contours:
+        core_area = float(cv2.contourArea(contour))
+        if core_area < min_core_area:
+            continue
+
+        x, y, width, height = cv2.boundingRect(contour)
+        if x <= 1 or y <= 1 or x + width >= frame_width - 1 or y + height >= frame_height - 1:
+            continue
+
+        core_center_x = x + (width / 2.0)
+        core_center_y = y + (height / 2.0)
+        # Recovery is only for cores inside a contour that the regular detector
+        # rejected. Without this constraint, the core of an already detected fruit
+        # would create a second, oversized box.
+        if not any(
+            region_x1 <= core_center_x <= region_x2
+            and region_y1 <= core_center_y <= region_y2
+            for region_x1, region_y1, region_x2, region_y2 in rejected_regions
+        ):
+            continue
+
+        # A ripe core is only part of the fruit. Expand from its centre to a
+        # fruit-sized proposal, while leaving enough separation for neighbouring
+        # fruits to remain distinct.
+        proposal_width = max(64, int(round(width * 3.0)))
+        proposal_height = max(76, int(round(height * 3.0)))
+        x1 = max(0, int(round(core_center_x - proposal_width / 2.0)))
+        y1 = max(0, int(round(core_center_y - proposal_height / 2.0)))
+        x2 = min(frame_width, x1 + proposal_width)
+        y2 = min(frame_height, y1 + proposal_height)
+
+        if (y1 + y2) / 2.0 >= frame_height * 0.82:
+            continue
+        boxes.append((x1, y1, x2, y2))
+
+    return suppress_overlapping_boxes(boxes, iou_threshold=0.30)
+
+
+def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
     """Exact same HSV detection used for still image capture.
     Returns (annotated_bgr, mature_boxes, immature_boxes).
     mature_boxes / immature_boxes are lists of (x, y, w, h).
@@ -76,9 +290,12 @@ def detect_mature_fruits_hsv(frame_bgr):
 
     lower_green = np.array([28, 70, 60])
     upper_green = np.array([80, 255, 255])
-    lower_red1 = np.array([0, 85, 100])
-    upper_red1 = np.array([12, 255, 255])
-    lower_red2 = np.array([145, 85, 100])
+    # Still photos have stronger shadows and sunlight than the video stream.
+    # Accept their orange-pink highlights only in image mode; video retains the
+    # narrower colour range that prevents ground detections.
+    lower_red1 = np.array([0, 70 if image_mode else 85, 85 if image_mode else 100])
+    upper_red1 = np.array([24 if image_mode else 12, 255, 255])
+    lower_red2 = np.array([140 if image_mode else 145, 70 if image_mode else 85, 85 if image_mode else 100])
     upper_red2 = np.array([180, 255, 255])
 
     mask_green = cv2.inRange(img_hsv, lower_green, upper_green)
@@ -86,7 +303,8 @@ def detect_mature_fruits_hsv(frame_bgr):
     mask_red2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
     mask_pink = cv2.bitwise_or(mask_red1, mask_red2)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    kernel_size = 9 if image_mode else 5
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_CLOSE, kernel)
     mask_pink = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
 
@@ -97,18 +315,37 @@ def detect_mature_fruits_hsv(frame_bgr):
 
     immature_boxes = []
     mature_boxes = []
+    rejected_regions = []
 
     for cnt in contours_pink:
         area = cv2.contourArea(cnt)
-        if area > 150:
-            x, y, w_fruit, h_fruit = cv2.boundingRect(cnt)
-            if not is_fully_mature_fruit(frame_bgr, (x, y, x + w_fruit, y + h_fruit)):
-                continue
-            mature_boxes.append((x, y, w_fruit, h_fruit))
+        x, y, w_fruit, h_fruit = cv2.boundingRect(cnt)
+        if area <= 150 or not is_hsv_fruit_candidate(
+            cnt,
+            mask_pink,
+            frame_bgr.shape,
+            image_mode=image_mode,
+            frame_bgr=frame_bgr,
+        ):
+            if image_mode and area > 150:
+                rejected_regions.append((x, y, x + w_fruit, y + h_fruit))
+            continue
+        mature_boxes.append((x, y, w_fruit, h_fruit))
 
     mature_boxes = suppress_overlapping_boxes(
         [(x, y, x + w_fruit, y + h_fruit) for x, y, w_fruit, h_fruit in mature_boxes]
     )
+
+    if image_mode:
+        # Recover nearby mature fruits that the broad mask merged into a single
+        # rejected contour. Existing detections win whenever proposals overlap.
+        for core_box in detect_occluded_mature_core_boxes(frame_bgr, rejected_regions):
+            if any(box_iou(core_box, existing_box) >= 0.30 for existing_box in mature_boxes):
+                continue
+            mature_boxes.append(core_box)
+
+        mature_boxes = suppress_overlapping_boxes(mature_boxes, iou_threshold=0.30)
+
     mature_boxes = [(x1, y1, x2 - x1, y2 - y1) for x1, y1, x2, y2 in mature_boxes]
 
     annotated = frame_bgr.copy()
@@ -267,6 +504,7 @@ def is_fully_mature_fruit(frame_bgr, box):
         cv2.countNonZero(center_red1) + cv2.countNonZero(center_red2)
     ) / center_area
     saturation_mean = float(np.mean(hsv[:, :, 1]))
+    brightness_mean = float(np.mean(hsv[:, :, 2]))
 
     quadrant_hits = 0
     quadrants = [
@@ -305,6 +543,29 @@ def is_fully_mature_fruit(frame_bgr, box):
         and largest_blob_ratio >= 0.10
         and quadrant_hits >= 3
     )
+
+
+def is_video_mature_fruit(frame_bgr, box) -> bool:
+    """Keep ripe fruits that are partly hidden, while rejecting ground colour noise.
+
+    ``is_fully_mature_fruit`` is deliberately very strict and is useful for clean
+    fruit crops. In a moving field video, arms and shadows often cover part of a
+    clearly pink fruit, causing that check to fail. The HSV detector has already
+    verified a fruit-like contour; a substantial ripe-colour core is a safe second
+    route for those occluded detections.
+    """
+    if is_fully_mature_fruit(frame_bgr, box):
+        return True
+
+    x1, y1, x2, y2 = map(int, box)
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(frame_bgr.shape[1], x2)
+    y2 = min(frame_bgr.shape[0], y2)
+    if x2 <= x1 or y2 <= y1:
+        return False
+
+    return mature_core_ratio(frame_bgr, x1, y1, x2 - x1, y2 - y1) >= 0.14
 
 
 def count_mature_in_video(
@@ -369,7 +630,7 @@ def count_mature_in_video(
                 continue
             if int(cls_id) in mature_class_ids:
                 if frame_bgr is not None and index < len(xyxys):
-                    if not is_fully_mature_fruit(frame_bgr, xyxys[index]):
+                    if not is_video_mature_fruit(frame_bgr, xyxys[index]):
                         continue
                 unique_ids.add(int(track_id))
 
@@ -415,12 +676,53 @@ def convert_to_browser_compatible_mp4(input_path: str, output_path: str) -> bool
         return False
 
 
+def is_annotated_yield_video(source, sample_frames: int = 5) -> bool:
+    """Identify a result video produced by this app before it is counted again.
+
+    Result videos have a black status banner with bright-green ``Fruit count`` text
+    at the top-left. Re-uploading one as if it were a raw capture changes the colour
+    pixels and creates a second, unreliable count. Use several frames so ordinary
+    foliage in the same corner is not mistaken for the banner.
+    """
+    if not isinstance(source, str) or not os.path.exists(source):
+        return False
+
+    capture = cv2.VideoCapture(source)
+    if not capture.isOpened():
+        return False
+
+    banner_frames = 0
+    try:
+        for _ in range(sample_frames):
+            ok, frame = capture.read()
+            if not ok:
+                break
+
+            height, width = frame.shape[:2]
+            banner = frame[4 : min(40, height), 4 : min(230, width)]
+            if banner.size == 0:
+                continue
+
+            hsv = cv2.cvtColor(banner, cv2.COLOR_BGR2HSV)
+            bright_green = cv2.inRange(
+                hsv, np.array([35, 160, 150]), np.array([85, 255, 255])
+            )
+            green_pixels = cv2.countNonZero(bright_green)
+            dark_ratio = float(np.mean(hsv[:, :, 2] < 45))
+            if green_pixels >= 600 and dark_ratio >= 0.35:
+                banner_frames += 1
+    finally:
+        capture.release()
+
+    return banner_frames >= max(2, min(sample_frames, 3))
+
+
 def annotate_video_and_count(
     model, source, output_path: str, conf: float = 0.4, method: str = "color"
 ) -> dict:
     """Process each frame with the same HSV detection used for still images (method='color'),
     OR with YOLO tracking (method='yolo').
-    Writes an annotated video file and returns the maximum unique mature count seen in any frame.
+    Writes an annotated video file and returns a running unique fruit count.
     """
     names = getattr(model, "names", {}) or {}
     mature_class_ids = {
@@ -459,7 +761,15 @@ def annotate_video_and_count(
             if w > 0 and h > 0:
                 frame_size = (w, h)
 
-        max_mature_in_frame = 0  # peak count across all frames (avoids double-count)
+        # Motion-aware temporal tracker. A fruit can briefly disappear behind an
+        # arm or during autofocus; predicting its position lets the same track be
+        # reconnected instead of creating a second count.
+        next_track_id = 1
+        active_tracks = []
+        unique_ids = set()
+        track_max_missed = max(90, int(round(fps * 3.0)))
+        display_hold_frames = max(6, int(round(fps * 0.25)))
+        min_confirm_hits = 3
 
         while True:
             ret, frame = cap.read()
@@ -498,14 +808,168 @@ def annotate_video_and_count(
             mature_boxes = [
                 (x, y, w_fruit, h_fruit)
                 for x, y, w_fruit, h_fruit in mature_boxes
-                if is_fully_mature_fruit(frame, (x, y, x + w_fruit, y + h_fruit))
+                if is_video_mature_fruit(frame, (x, y, x + w_fruit, y + h_fruit))
             ]
 
-            # Running max: the largest number of mature fruits visible at once
-            if len(mature_boxes) > max_mature_in_frame:
-                max_mature_in_frame = len(mature_boxes)
+            frame_h, frame_w = frame.shape[:2]
+            diag = float(np.hypot(frame_w, frame_h))
+            now_tick = frame_count
+            used_track_ids = set()
+            unmatched_tracks = [t for t in active_tracks]
 
-            count_label = f"Mature fruit count: {max_mature_in_frame}"
+            for x, y, w_fruit, h_fruit in mature_boxes:
+                cx = x + (w_fruit / 2.0)
+                cy = y + (h_fruit / 2.0)
+                box = (x, y, x + w_fruit, y + h_fruit)
+
+                best_track = None
+                best_score = None
+                for track in unmatched_tracks:
+                    if track["id"] in used_track_ids:
+                        continue
+
+                    # Predict where the fruit should be after camera motion. The
+                    # old tracker compared only against a frozen box, which is why
+                    # a yellow hold box could later become a newly counted fruit.
+                    frame_gap = max(
+                        1, now_tick - int(track.get("last_seen", now_tick))
+                    )
+                    predicted_cx = track["cx"] + track.get("vx", 0.0) * frame_gap
+                    predicted_cy = track["cy"] + track.get("vy", 0.0) * frame_gap
+                    previous_box = track.get("box")
+                    shift_x = predicted_cx - track["cx"]
+                    shift_y = predicted_cy - track["cy"]
+                    predicted_box = (
+                        previous_box[0] + shift_x,
+                        previous_box[1] + shift_y,
+                        previous_box[2] + shift_x,
+                        previous_box[3] + shift_y,
+                    )
+                    dx = predicted_cx - cx
+                    dy = predicted_cy - cy
+                    dist = float(np.hypot(dx, dy))
+                    iou = box_iou(box, predicted_box)
+                    current_diag = float(np.hypot(w_fruit, h_fruit))
+                    previous_diag = float(
+                        np.hypot(
+                            previous_box[2] - previous_box[0],
+                            previous_box[3] - previous_box[1],
+                        )
+                    )
+                    current_area = max(1.0, float(w_fruit * h_fruit))
+                    previous_area = max(
+                        1.0,
+                        float(
+                            (previous_box[2] - previous_box[0])
+                            * (previous_box[3] - previous_box[1])
+                        ),
+                    )
+                    size_ratio = min(current_area, previous_area) / max(
+                        current_area, previous_area
+                    )
+                    # A counted fruit may be re-segmented into a much smaller box
+                    # after a leaf passes in front of it. Keep that identity unless
+                    # its predicted position also disagrees; uncounted tracks stay
+                    # stricter so nearby fruits are not merged prematurely.
+                    min_size_ratio = 0.12 if track.get("counted") else 0.28
+                    if size_ratio < min_size_ratio:
+                        continue
+                    allowed_distance = max(
+                        24.0,
+                        min(
+                            diag * 0.14,
+                            0.85 * max(current_diag, previous_diag)
+                            + 10.0 * frame_gap,
+                        ),
+                    )
+                    if iou < 0.08 and dist > allowed_distance:
+                        continue
+
+                    score = (dist / allowed_distance) - (iou * 0.75)
+                    if best_score is None or score < best_score:
+                        best_score = score
+                        best_track = track
+
+                if best_track is not None and best_score is not None:
+                    frame_gap = max(
+                        1, now_tick - int(best_track.get("last_seen", now_tick))
+                    )
+                    measured_vx = (cx - best_track["cx"]) / frame_gap
+                    measured_vy = (cy - best_track["cy"]) / frame_gap
+                    best_track["vx"] = (
+                        0.70 * measured_vx + 0.30 * best_track.get("vx", 0.0)
+                    )
+                    best_track["vy"] = (
+                        0.70 * measured_vy + 0.30 * best_track.get("vy", 0.0)
+                    )
+                    best_track["cx"] = cx
+                    best_track["cy"] = cy
+                    best_track["box"] = box
+                    best_track["last_seen"] = now_tick
+                    best_track["missed"] = 0
+                    best_track["hits"] = int(best_track.get("hits", 0)) + 1
+                    best_track["consecutive_hits"] = int(
+                        best_track.get("consecutive_hits", 0)
+                    ) + 1
+                    used_track_ids.add(best_track["id"])
+                else:
+                    track_id = next_track_id
+                    next_track_id += 1
+                    active_tracks.append(
+                        {
+                            "id": track_id,
+                            "cx": cx,
+                            "cy": cy,
+                            "box": box,
+                            "last_seen": now_tick,
+                            "missed": 0,
+                            "hits": 1,
+                            "consecutive_hits": 1,
+                            "vx": 0.0,
+                            "vy": 0.0,
+                            "counted": False,
+                        }
+                    )
+                    used_track_ids.add(track_id)
+
+            for track in active_tracks:
+                if track["id"] not in used_track_ids:
+                    track["missed"] = int(track.get("missed", 0)) + 1
+                    track["consecutive_hits"] = 0
+
+            for track in active_tracks:
+                if (
+                    not track.get("counted")
+                    and int(track.get("consecutive_hits", 0)) >= min_confirm_hits
+                ):
+                    unique_ids.add(track["id"])
+                    track["counted"] = True
+
+            # Keep tracks alive long enough to survive short detection blinking.
+            active_tracks = [t for t in active_tracks if int(t.get("missed", 0)) <= track_max_missed]
+
+            # Keep a briefly missed fruit visible in the same blue style, at its
+            # predicted location. This removes the distracting yellow stale box
+            # without creating another detection or changing the total.
+            for track in active_tracks:
+                if (
+                    track["id"] in used_track_ids
+                    or int(track.get("missed", 0)) > display_hold_frames
+                ):
+                    continue
+                missed_frames = int(track.get("missed", 0))
+                x1, y1, x2, y2 = track["box"]
+                shift_x = track.get("vx", 0.0) * missed_frames
+                shift_y = track.get("vy", 0.0) * missed_frames
+                cv2.rectangle(
+                    annotated,
+                    (int(x1 + shift_x), int(y1 + shift_y)),
+                    (int(x2 + shift_x), int(y2 + shift_y)),
+                    (255, 0, 0),
+                    2,
+                )
+
+            count_label = f"Fruit count: {len(unique_ids)}"
             cv2.rectangle(
                 annotated, (6, 6), (len(count_label) * 11 + 12, 36), (0, 0, 0), -1
             )
@@ -538,7 +1002,8 @@ def annotate_video_and_count(
             browser_compatible_path = output_path
 
         return {
-            "total_mature_fruits": max_mature_in_frame,
+            "total_mature_fruits": len(unique_ids),
+            "total_fruits": len(unique_ids),
             "frame_count": frame_count,
             "mature_class_ids": [],
         }
@@ -616,7 +1081,7 @@ def annotate_video_and_count(
                     continue
                 if box_w < 20 or box_h < 20:
                     continue
-                if not is_fully_mature_fruit(orig, (x1, y1, x2, y2)):
+                if not is_video_mature_fruit(orig, (x1, y1, x2, y2)):
                     continue
                 is_mature = int(cls_id) in mature_class_ids
                 # Always draw detection boxes in blue for consistency
@@ -677,6 +1142,7 @@ def annotate_video_and_count(
 
     return {
         "total_mature_fruits": len(unique_ids),
+        "total_fruits": len(unique_ids),
         "frame_count": frame_count,
         "mature_class_ids": sorted(list(mature_class_ids)),
     }
@@ -687,7 +1153,7 @@ CORS(
     app,
     supports_credentials=True,
     origins="*",
-    allow_headers=["Content-Type", "X-CSRFToken"],
+    allow_headers=["Content-Type", "X-CSRFToken", "X-Pitaya-User"],
     methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
 )
 
@@ -710,7 +1176,65 @@ def serve_uploaded_file(filename):
         return send_from_directory(upload_root, filename)
 
 
-@app.route("/api/dashboard/health", methods=["GET"])
+@app.route("/api/uploads/<path:filename>")
+def serve_api_uploaded_file(filename):
+    """Serve uploaded files via the /api/uploads/* path for frontend compatibility."""
+    upload_root = os.path.join(os.getcwd(), "uploads")
+
+    # Normalize input
+    filename = str(filename or "").replace("\\", "/").lstrip("/")
+
+    # If the stored string contains 'uploads/' anywhere (absolute paths or prefixed), strip up to it
+    if "uploads/" in filename:
+        filename = filename.split("uploads/")[-1]
+
+    # Try a few candidate locations so we can handle absolute paths, prefixed values, and basenames
+    candidates = [
+        os.path.join(upload_root, filename),
+        os.path.join(upload_root, os.path.basename(filename)),
+    ]
+
+    found_path = None
+    for cand in candidates:
+        if os.path.exists(cand):
+            found_path = cand
+            break
+
+    if not found_path:
+        # If file not found, return a simple SVG placeholder served from this host
+        svg = (
+            '<?xml version="1.0" encoding="UTF-8" standalone="no"?>'
+            '<svg xmlns="http://www.w3.org/2000/svg" width="300" height="200">'
+            '<rect width="100%" height="100%" fill="#f2f2f2"/>'
+            '<text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" '
+            'font-family="Arial, Helvetica, sans-serif" font-size="14" fill="#888">'
+            'Image not found</text>'
+            '</svg>'
+        )
+        return Response(svg, mimetype="image/svg+xml")
+
+    # Determine MIME type
+    lower = found_path.lower()
+    if lower.endswith(".mp4"):
+        mimetype = "video/mp4"
+    elif lower.endswith(".avi"):
+        mimetype = "video/x-msvideo"
+    elif lower.endswith((".jpg", ".jpeg")):
+        mimetype = "image/jpeg"
+    elif lower.endswith(".png"):
+        mimetype = "image/png"
+    else:
+        mimetype = None
+
+    if mimetype:
+        return send_file(found_path, mimetype=mimetype)
+    else:
+        return send_file(found_path)
+
+
+@app.route("/health", methods=["GET"])  # frontend compatibility (simple root health)
+@app.route("/api/health", methods=["GET"])  # common API health path
+@app.route("/api/dashboard/health", methods=["GET"])  # existing path kept for backward compatibility
 def health_check():
     """Health check endpoint"""
     return jsonify(
@@ -1302,10 +1826,11 @@ def get_csrf_token():
 def get_dashboard_summary():
     """Get comprehensive dashboard summary data - Single Source of Truth"""
     try:
+        user_id = get_request_user_id()
         # Use new data integrity methods
-        metrics = db_manager.get_dashboard_metrics()
-        alerts = db_manager.get_all_alerts_with_detections()
-        yield_stats = db_manager.get_yield_statistics()
+        metrics = db_manager.get_dashboard_metrics(user_id=user_id)
+        alerts = db_manager.get_all_alerts_with_detections(user_id=user_id)
+        yield_stats = db_manager.get_yield_statistics(user_id=user_id)
 
         # Count unread alerts
         unread_alerts = len([a for a in alerts if a["Status"] == "Unread"])
@@ -1340,7 +1865,7 @@ def get_dashboard_summary():
 def get_disease_statistics():
     """Get disease detection statistics"""
     try:
-        stats = db_manager.get_disease_statistics()
+        stats = db_manager.get_disease_statistics(user_id=get_request_user_id())
         return jsonify(
             {"success": True, "data": stats, "timestamp": datetime.now().isoformat()}
         )
@@ -1352,7 +1877,7 @@ def get_disease_statistics():
 def get_yield_statistics():
     """Get yield prediction statistics"""
     try:
-        stats = db_manager.get_yield_statistics()
+        stats = db_manager.get_yield_statistics(user_id=get_request_user_id())
         return jsonify(
             {"success": True, "data": stats, "timestamp": datetime.now().isoformat()}
         )
@@ -1365,21 +1890,29 @@ def save_yield_prediction():
     """Save a yield detection result to the chart database"""
     try:
         body = request.get_json(force=True) or {}
-        mature_fruits = body.get("mature_fruits")
+        fruit_count = body.get("fruit_count")
+        mature_fruits = body.get("mature_fruits", fruit_count)
         if mature_fruits is None:
             return (
-                jsonify({"success": False, "error": "mature_fruits is required"}),
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "mature_fruits (or fruit_count) is required",
+                    }
+                ),
                 400,
             )
         predicted_yield = float(mature_fruits)
         location = str(body.get("location", "Field"))
         season = body.get("season") or None
         upload_type = str(body.get("upload_type", "image"))
+        user_id = str(get_request_user_id(body.get("user_id") or "default_user") or "default_user")
         new_id = db_manager.add_yield_prediction(
             predicted_yield=predicted_yield,
             location=location,
             season=season,
             upload_type=upload_type,
+            user_id=user_id,
         )
         return jsonify(
             {
@@ -1397,12 +1930,43 @@ def save_yield_prediction():
 def list_yield_predictions():
     """List all yield prediction records for the Yield Report page"""
     try:
-        records = db_manager.get_all_yield_predictions()
+        records = db_manager.get_all_yield_predictions(user_id=get_request_user_id())
         return jsonify(
             {
                 "success": True,
                 "data": records,
                 "count": len(records),
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/dashboard/legacy/migrate-user-data", methods=["POST"])
+def migrate_user_data():
+    """Move legacy shared records to a specific user scope."""
+    try:
+        payload = request.get_json(silent=True) or {}
+        target_user_id = (
+            request.headers.get("X-Pitaya-User")
+            or payload.get("target_user_id")
+            or request.form.get("target_user_id")
+        )
+        target_user_id = str(target_user_id or "").strip()
+        if not target_user_id:
+            return jsonify({"success": False, "error": "target_user_id is required"}), 400
+
+        disease_count, yield_count = migrate_legacy_user_data(target_user_id)
+        return jsonify(
+            {
+                "success": True,
+                "message": "Legacy data migrated",
+                "data": {
+                    "target_user_id": target_user_id,
+                    "disease_records": disease_count,
+                    "yield_records": yield_count,
+                },
                 "timestamp": datetime.now().isoformat(),
             }
         )
@@ -1515,7 +2079,7 @@ def get_alerts():
     """Get alerts for dashboard - Full History from Disease_Detections"""
     try:
         unread_only = request.args.get("unread_only", "false").lower() == "true"
-        alerts = db_manager.get_all_alerts_with_detections()
+        alerts = db_manager.get_all_alerts_with_detections(user_id=get_request_user_id())
 
         if unread_only:
             alerts = [alert for alert in alerts if alert["Status"] == "Unread"]
@@ -1531,7 +2095,7 @@ def get_alerts():
 def get_unread_alert_count():
     """Get count of unread alerts"""
     try:
-        count = db_manager.get_unread_alert_count()
+        count = db_manager.get_unread_alert_count(user_id=get_request_user_id())
         return jsonify(
             {
                 "success": True,
@@ -1560,11 +2124,13 @@ def mark_alert_read(alert_id):
 def get_all_detections():
     """Get all disease detections"""
     try:
-        detections = db_manager.get_all_disease_detections()
+        user_id = get_request_user_id()
+        detections = db_manager.get_all_disease_detections(user_id=user_id)
 
         # Format the response
         formatted_detections = []
         for detection in detections:
+            image_path = detection.get("ImagePath")
             formatted_detections.append(
                 {
                     "id": detection.get("DetectionID"),
@@ -1573,8 +2139,11 @@ def get_all_detections():
                     "confidence": detection.get("Confidence"),
                     "date_time": detection.get("DateTime"),
                     "location": detection.get("Location", "Unknown"),
-                    "image_path": detection.get("ImagePath"),
-                    "user_id": detection.get("UserID", "default_user"),
+                    "image_path": image_path,
+                    "image_url": make_uploaded_file_url(image_path),
+                    "user_id": detection.get("user_id")
+                    or detection.get("UserID")
+                    or "",
                     "created_at": detection.get("CreatedAt"),
                 }
             )
@@ -1597,7 +2166,12 @@ def get_reports():
     try:
         start_date = request.args.get("start_date")
         end_date = request.args.get("end_date")
-        reports = db_manager.get_reports_data(start_date=start_date, end_date=end_date)
+        user_id = get_request_user_id()
+        reports = db_manager.get_reports_data(
+            start_date=start_date,
+            end_date=end_date,
+            user_id=user_id,
+        )
         return jsonify(
             {"success": True, "data": reports, "timestamp": datetime.now().isoformat()}
         )
@@ -1610,7 +2184,7 @@ def get_reports():
 def get_disease_distribution_chart():
     """Get data for disease distribution chart - from Disease_Detections"""
     try:
-        metrics = db_manager.get_dashboard_metrics()
+        metrics = db_manager.get_dashboard_metrics(user_id=get_request_user_id())
 
         # Format data for Chart.js
         chart_data = {
@@ -1651,7 +2225,7 @@ def get_disease_distribution_chart():
 def get_severity_distribution_chart():
     """Get data for severity distribution chart - from Disease_Detections"""
     try:
-        metrics = db_manager.get_dashboard_metrics()
+        metrics = db_manager.get_dashboard_metrics(user_id=get_request_user_id())
 
         # Format data for Chart.js
         chart_data = {
@@ -1685,7 +2259,7 @@ def get_severity_distribution_chart():
 def get_yield_trend_chart():
     """Get data for yield trend chart - from yield predictions"""
     try:
-        stats = db_manager.get_yield_statistics()
+        stats = db_manager.get_yield_statistics(user_id=get_request_user_id())
 
         # Format data for Chart.js
         chart_data = {
@@ -1725,7 +2299,7 @@ def get_yield_trend_chart():
 def get_daily_detections_chart():
     """Get data for daily detections trend chart - from Disease_Detections"""
     try:
-        metrics = db_manager.get_dashboard_metrics()
+        metrics = db_manager.get_dashboard_metrics(user_id=get_request_user_id())
 
         # Convert daily detections to list format
         daily_data = []
@@ -1783,7 +2357,8 @@ def get_detection_details(detection_id):
     """Get detailed information for a specific detection"""
     try:
         # Get all detections to find the specific one
-        detections = db_manager.get_all_disease_detections()
+        user_id = get_request_user_id()
+        detections = db_manager.get_all_disease_detections(user_id=user_id)
 
         # Find the detection with the matching ID
         detection = None
@@ -1814,7 +2389,10 @@ def get_detection_details(detection_id):
                 "date_time": detection.get("DateTime"),
                 "location": detection.get("Location", "Unknown"),
                 "image_path": detection.get("ImagePath"),
-                "user_id": detection.get("UserID", "default_user"),
+                "image_url": make_uploaded_file_url(detection.get("ImagePath")),
+                "user_id": detection.get("user_id")
+                or detection.get("UserID")
+                or "",
                 "created_at": detection.get("CreatedAt"),
                 "alert": alert if alert else None,
             },
@@ -2126,6 +2704,17 @@ def generate_csv_report(report_data, report_id):
             ]
         )
 
+        # Normalize image path to a URL for CSV
+        def _image_url(p):
+            if not p:
+                return ""
+            p = str(p).replace('\\', '/')
+            if p.startswith('/uploads/'):
+                p = p[len('/uploads/'):]
+            if p.startswith('uploads/'):
+                p = p[len('uploads/'):]
+            return f"/api/uploads/{p}"
+
         # Write combined row
         writer.writerow(
             [
@@ -2135,7 +2724,7 @@ def generate_csv_report(report_data, report_id):
                 f"{sum_confidence:.2f}%",
                 report_data["DateTime"],
                 report_data.get("Location", "Unknown"),
-                report_data.get("ImagePath", ""),
+                _image_url(report_data.get("ImagePath") or report_data.get("image_path")),
             ]
         )
 
@@ -2175,7 +2764,7 @@ def generate_csv_report(report_data, report_id):
                 f"{report_data['Confidence']:.2f}%",
                 report_data["DateTime"],
                 report_data.get("Location", "Unknown"),
-                report_data.get("ImagePath", ""),
+                _image_url(report_data.get("ImagePath") or report_data.get("image_path")),
             ]
         )
 
@@ -2267,53 +2856,10 @@ def yield_image_detect():
                     500,
                 )
 
-            img_h, img_w = img_bgr.shape[:2]
-            img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-
-            # Color ranges
-            lower_green = np.array([28, 70, 60])
-            upper_green = np.array([80, 255, 255])
-            lower_red1 = np.array([0, 85, 100])
-            upper_red1 = np.array([12, 255, 255])
-            lower_red2 = np.array([145, 85, 100])
-            upper_red2 = np.array([180, 255, 255])
-
-            mask_green = cv2.inRange(img_hsv, lower_green, upper_green)
-            mask_red1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
-            mask_red2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
-            mask_pink = cv2.bitwise_or(mask_red1, mask_red2)
-
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_CLOSE, kernel)
-            mask_pink = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
-
-            # Immature (green) fruit detection disabled; only process pink/mature fruits.
-            _, _ = cv2.findContours(
-                mask_green, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-            contours_pink, _ = cv2.findContours(
-                mask_pink, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-            )
-
-            immature_fruits = []
-            mature_fruits = []
-
-            for cnt in contours_pink:
-                area = cv2.contourArea(cnt)
-                if area > 150:
-                    x, y, w_fruit, h_fruit = cv2.boundingRect(cnt)
-                    if is_fully_mature_fruit(img_bgr, (x, y, x + w_fruit, y + h_fruit)):
-                        mature_fruits.append((x, y, w_fruit, h_fruit))
-
-            mature_boxes = suppress_overlapping_boxes(
-                [
-                    (x, y, x + w_fruit, y + h_fruit)
-                    for x, y, w_fruit, h_fruit in mature_fruits
-                ]
-            )
-            mature_fruits = [
-                (x1, y1, x2 - x1, y2 - y1) for x1, y1, x2, y2 in mature_boxes
-            ]
+            # Use exactly the same still-photo HSV path as hybrid mode. Keeping two
+            # copies of the colour logic caused the colour-only endpoint to miss a
+            # different set of partly occluded mature fruits.
+            _, mature_fruits, _ = detect_mature_fruits_hsv(img_bgr, image_mode=True)
 
             # Draw boxes on BGR image
             annotated_bgr = img_bgr.copy()
@@ -2359,39 +2905,42 @@ def yield_image_detect():
                 }
             )
 
-        # Load model
+        detections = []
+        frame_bgr = cv2.imread(img_path)
+        model = None
+        results = []
+        model_error = None
+
+        # Hybrid mode must still return the carefully filtered HSV result if the
+        # optional model cannot be loaded or make a prediction. Previously, a model
+        # runtime error aborted the whole image request before the fallback ran.
         try:
             model = load_yolo_model()
-        except Exception as e:
-            return jsonify({"success": False, "error": str(e)}), 500
-
-        # Run prediction
-        results = list(
-            model.predict(source=img_path, conf=conf, save=False, verbose=False)
-        )
-        if not results:
-            return jsonify(
-                {"success": True, "data": {"detections": [], "annotated_image": None}}
+            results = list(
+                model.predict(source=img_path, conf=conf, save=False, verbose=False)
             )
+        except Exception as exc:
+            model_error = str(exc)
+            if method != "hybrid":
+                return jsonify({"success": False, "error": model_error}), 500
+            print(f"YOLO image prediction unavailable; using HSV fallback: {model_error}")
 
-        r = results[0]
-
-        detections = []
+        r = results[0] if results else None
         # r.boxes.xyxy, r.boxes.conf, r.boxes.cls
-        boxes = getattr(r, "boxes", None)
+        boxes = getattr(r, "boxes", None) if r is not None else None
         names = getattr(model, "names", {}) or {}
         mature_class_ids = {
             i for i, n in names.items() if str(n).strip().lower() == "mature"
         }
         if not mature_class_ids and names:
             mature_class_ids = {0}
+        if r is not None and getattr(r, "orig_img", None) is not None:
+            frame_bgr = r.orig_img
+
         if boxes is not None and len(boxes) > 0:
             xyxy = boxes.xyxy.tolist()
             confs = boxes.conf.tolist()
             clss = boxes.cls.tolist()
-            frame_bgr = getattr(r, "orig_img", None)
-            if frame_bgr is None:
-                frame_bgr = cv2.imread(img_path)
 
             for b, c, cl in zip(xyxy, confs, clss):
                 if mature_class_ids and int(cl) not in mature_class_ids:
@@ -2403,6 +2952,28 @@ def yield_image_detect():
                         "box": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
                         "confidence": float(c),
                         "class_id": int(cl),
+                        "label": "MATURE",
+                    }
+                )
+
+        # Optional fallback for controlled evaluation only. Production image
+        # assessment uses the trained detector to avoid colour-based ground hits.
+        if method == "hybrid" and frame_bgr is not None:
+            _, hsv_boxes, _ = detect_mature_fruits_hsv(frame_bgr, image_mode=True)
+            for x, y, width, height in hsv_boxes:
+                candidate_box = [
+                    float(x),
+                    float(y),
+                    float(x + width),
+                    float(y + height),
+                ]
+                if any(box_iou(candidate_box, item["box"]) >= 0.30 for item in detections):
+                    continue
+                detections.append(
+                    {
+                        "box": candidate_box,
+                        "confidence": 0.80,
+                        "class_id": next(iter(mature_class_ids), 0),
                         "label": "MATURE",
                     }
                 )
@@ -2420,7 +2991,7 @@ def yield_image_detect():
         for det in detections:
             x1, y1, x2, y2 = det["box"]
             label = f"{det['label']} {det['confidence']:.2f}"
-            draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+            draw.rectangle([x1, y1, x2, y2], outline="#0066FF", width=3)
             # Compute text size in a way compatible with Pillow versions
             try:
                 bbox = draw.textbbox((0, 0), label, font=font)
@@ -2430,7 +3001,7 @@ def yield_image_detect():
                 text_width, text_height = (len(label) * 6, 14)
 
             text_bg = [x1, max(0, y1 - text_height - 4), x1 + text_width + 6, y1]
-            draw.rectangle(text_bg, fill="red")
+            draw.rectangle(text_bg, fill="#0066FF")
             draw.text(
                 (x1 + 3, max(0, y1 - text_height - 2)), label, fill="white", font=font
             )
@@ -2495,6 +3066,23 @@ def yield_video_detect():
             video_path = os.path.join(save_dir, f"{uuid.uuid4().hex}_{filename}")
             video_file.save(video_path)
             source = video_path
+
+            # An annotated result is useful to download and review, but it is not a
+            # valid source for another count. Its rendered count banner and boxes
+            # alter the pixels and can produce a different total on a second pass.
+            if is_annotated_yield_video(source):
+                return (
+                    jsonify(
+                        {
+                            "success": False,
+                            "error": (
+                                "This is already an annotated detection result. "
+                                "Please upload the original, unannotated video."
+                            ),
+                        }
+                    ),
+                    400,
+                )
 
         # Load YOLO model
         try:
@@ -3289,14 +3877,16 @@ def translate_diseases_batch():
 def user_preferences():
     """Get or update profile and notification preferences."""
     try:
+        user_id = str(get_request_user_id("default_user") or "default_user")
+
         if request.method == "GET":
-            prefs = db_manager.get_user_preferences("default_user")
+            prefs = db_manager.get_user_preferences(user_id)
 
             return jsonify(
                 {
                     "success": True,
                     "data": {
-                        "user_id": "default_user",
+                        "user_id": user_id,
                         "preferred_language": prefs.get("preferred_language", "en"),
                         "notification_email": prefs.get("notification_email"),
                         "farm_name": prefs.get("farm_name"),
@@ -3331,7 +3921,7 @@ def user_preferences():
                     )
 
             db_manager.save_user_preferences(
-                user_id="default_user",
+                user_id=user_id,
                 preferred_language=preferred_language,
                 notification_email=notification_email,
                 farm_name=farm_name,
@@ -3342,7 +3932,7 @@ def user_preferences():
                 {
                     "success": True,
                     "data": {
-                        "user_id": "default_user",
+                        "user_id": user_id,
                         "preferred_language": preferred_language,
                         "notification_email": notification_email,
                         "farm_name": farm_name,
@@ -3373,6 +3963,10 @@ def add_disease_detection():
         confidence = payload.get("confidence") or request.form.get("confidence")
         location = payload.get("location") or request.form.get("location")
         image_path = payload.get("image_path") or ""
+        user_id = str(
+            get_request_user_id(payload.get("user_id") or "default_user")
+            or "default_user"
+        )
 
         # Validate required fields
         required_fields = {
@@ -3446,6 +4040,7 @@ def add_disease_detection():
             location=location,
             image_path=image_path,
             session_id=session_id,
+            user_id=user_id,
         )
 
         return jsonify(
