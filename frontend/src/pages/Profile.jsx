@@ -263,13 +263,13 @@ export default function Profile() {
   }
 
   const tabs = [
-    { id: 'profile', label: 'Profile Information', icon: User },
+    { id: 'profile', label: 'Profile Information', mobileLabel: 'Profile', icon: User },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'preferences', label: 'Preferences', icon: Settings }
   ]
 
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-4xl mx-auto min-w-0">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -277,18 +277,18 @@ export default function Profile() {
         className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden"
       >
         {/* Profile Header */}
-        <div className="bg-gradient-to-r from-green-600 to-green-500 dark:from-green-700 dark:to-green-600 p-6">
-          <div className="flex items-center gap-4">
+        <div className="bg-gradient-to-r from-green-600 to-green-500 dark:from-green-700 dark:to-green-600 p-4 sm:p-6">
+          <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:gap-4 sm:text-left">
             <div className="relative">
               {profilePicture ? (
-                <img 
+                <img
                   src={profilePicture} 
                   alt="Profile" 
-                  className="w-20 h-20 rounded-full object-cover border-2 border-white/30"
+                  className="w-16 h-16 sm:w-20 sm:h-20 rounded-full object-cover border-2 border-white/30"
                 />
               ) : (
-                <div className="w-20 h-20 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-                  <User className="w-10 h-10 text-white" />
+                <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                  <User className="w-8 h-8 sm:w-10 sm:h-10 text-white" />
                 </div>
               )}
               <input
@@ -307,9 +307,9 @@ export default function Profile() {
                 <Camera className="w-3 h-3 text-gray-600 dark:text-gray-300" />
               </button>
             </div>
-            <div className="text-white">
-              <h1 className="text-2xl font-bold">{formData.fullName}</h1>
-              <p className="text-white/80">{formData.email}</p>
+            <div className="min-w-0 text-white">
+              <h1 className="text-xl sm:text-2xl font-bold break-words">{formData.fullName}</h1>
+              <p className="text-sm sm:text-base text-white/80 break-all sm:break-normal">{formData.email}</p>
               <p className="text-sm text-white/60 mt-1">{formData.farmName}</p>
             </div>
           </div>
@@ -317,7 +317,7 @@ export default function Profile() {
 
         {/* Save Status Messages */}
         {saveStatus.message && (
-          <div className={`mx-6 mt-4 p-3 rounded-lg flex items-center gap-2 ${
+          <div className={`mx-4 sm:mx-6 mt-4 p-3 rounded-lg flex items-center gap-2 ${
             saveStatus.type === 'success' 
               ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400 border border-green-200 dark:border-green-800' 
               : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800'
@@ -333,20 +333,21 @@ export default function Profile() {
 
         {/* Tabs */}
         <div className="border-b border-gray-200 dark:border-gray-700">
-          <nav className="flex space-x-8 px-6">
+          <nav className="grid grid-cols-3 px-1 sm:flex sm:space-x-8 sm:px-6" aria-label="Profile sections">
             {tabs.map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                className={`flex min-w-0 justify-center py-3 px-1 border-b-2 font-medium text-xs sm:text-sm transition-colors ${
                   activeTab === tab.id
                     ? 'border-green-600 text-green-600 dark:text-green-400'
                     : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
                 }`}
               >
-                <div className="flex items-center gap-2">
-                  <tab.icon className="w-4 h-4" />
-                  {tab.label}
+                <div className="flex min-w-0 flex-col items-center gap-1 sm:flex-row sm:gap-2">
+                  <tab.icon className="w-4 h-4 shrink-0" />
+                  <span className="sm:hidden truncate">{tab.mobileLabel || tab.label}</span>
+                  <span className="hidden sm:inline">{tab.label}</span>
                 </div>
               </button>
             ))}
@@ -354,7 +355,7 @@ export default function Profile() {
         </div>
 
         {/* Tab Content */}
-        <div className="p-6">
+        <div className="p-4 sm:p-6">
           {/* Profile Information Tab */}
           {activeTab === 'profile' && (
             <motion.div
@@ -459,14 +460,14 @@ export default function Profile() {
                   yieldReports: { label: 'Yield Reports', description: 'Weekly yield prediction reports' },
                   systemUpdates: { label: 'System Updates', description: 'Notifications about system maintenance and updates' }
                 }).map(([key, config]) => (
-                  <div key={key} className="flex items-center justify-between py-3">
-                    <div>
+                  <div key={key} className="flex items-center gap-4 justify-between py-3">
+                    <div className="min-w-0 flex-1">
                       <h4 className="text-sm font-medium text-gray-900 dark:text-white">{config.label}</h4>
                       <p className="text-sm text-gray-500 dark:text-gray-400">{config.description}</p>
                     </div>
                     <button
                       onClick={() => handleNotificationChange(key)}
-                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                      className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${
                         notifications[key] ? 'bg-green-600' : 'bg-gray-200 dark:bg-gray-600'
                       }`}
                     >
