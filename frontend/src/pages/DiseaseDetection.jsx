@@ -317,7 +317,7 @@ export default function DiseaseDetection() {
     >
       <div>
         <h1 className="font-display font-bold text-2xl text-gray-900 dark:text-white">Disease Detection</h1>
-        <p className="text-gray-600 dark:text-gray-300 mt-1 text-base">Upload or capture a leaf image to identify disease.</p>
+        <p className="text-gray-600 dark:text-gray-300 mt-1 text-base">Upload or capture one clear dragon fruit stem image to identify disease.</p>
       </div>
 
       {/* Tabs: Upload | Camera */}
@@ -357,8 +357,8 @@ export default function DiseaseDetection() {
                 aria-label="Choose image file"
               />
               <span className="text-4xl mb-3" aria-hidden>🖼️</span>
-              <p className="font-medium text-gray-800 dark:text-gray-200 text-center">Click or drag image here</p>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">PNG, JPG up to 10MB</p>
+              <p className="font-medium text-gray-800 dark:text-gray-200 text-center">Upload one centered dragon fruit stem</p>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 text-center">Keep leaves, soil, and other plants out of the frame. PNG or JPG, up to 10MB.</p>
             </div>
           )}
           {mode === 'camera' && (

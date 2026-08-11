@@ -256,6 +256,114 @@ class ImprovedDiseaseDetection:
             # Fail closed for safety: reject when subject validation breaks.
             return {"is_target": False, "reason": "validator_error"}
 
+    def extract_stem_region(self, image):
+        """Find the centered dragon-fruit stem and remove unrelated background.
+
+        The disease model was trained on stem disease imagery and has no
+        ``background`` class.  Passing an entire field photo lets foliage,
+        soil, or other plants force a disease label.  A capture is therefore
+        valid only when it contains one substantial green/brown organic region
+        near the centre, where the guided camera/upload view asks the user to
+        place the stem.  Only that padded region is sent to the model.
+        """
+        try:
+            if image.mode != "RGB":
+                image = image.convert("RGB")
+
+            rgb = np.array(image)
+            height, width = rgb.shape[:2]
+            if height < 32 or width < 32:
+                return None, {"is_stem": False, "reason": "image_too_small"}
+
+            hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+            h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+
+            # Keep the saturated green/brown tissue that makes up a pitaya
+            # stem.  Lesions remain included later through padding/dilation.
+            green = (h >= 25) & (h <= 95) & (s >= 40) & (v >= 25)
+            brown = (h >= 5) & (h <= 30) & (s >= 35) & (v >= 20)
+            mask = np.where(green | brown, 255, 0).astype(np.uint8)
+
+            kernel_size = max(5, int(round(min(width, height) * 0.025)) | 1)
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
+            )
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+            component_count, _, stats, centroids = cv2.connectedComponentsWithStats(
+                mask, connectivity=8
+            )
+            image_area = float(width * height)
+            center_x, center_y = width / 2.0, height / 2.0
+            diagonal = max(float(np.hypot(width, height)), 1.0)
+            best = None
+
+            for index in range(1, component_count):
+                x, y, component_width, component_height, area = stats[index]
+                area_ratio = float(area) / image_area
+                if area_ratio < 0.035:
+                    continue
+
+                cx, cy = centroids[index]
+                centre_distance = float(np.hypot(cx - center_x, cy - center_y)) / diagonal
+                # Prefer a substantial component close to the centre.  This
+                # ignores small background leaves/soil patches at the edges.
+                score = area_ratio - (0.35 * centre_distance)
+                if best is None or score > best[0]:
+                    best = (
+                        score,
+                        int(x),
+                        int(y),
+                        int(component_width),
+                        int(component_height),
+                        area_ratio,
+                        centre_distance,
+                    )
+
+            if best is None:
+                return None, {"is_stem": False, "reason": "stem_not_found"}
+
+            _, x, y, component_width, component_height, area_ratio, centre_distance = best
+            # A stem should be reasonably centred; otherwise this is likely a
+            # background plant rather than the intended subject.
+            if centre_distance > 0.34:
+                return None, {
+                    "is_stem": False,
+                    "reason": "stem_not_centered",
+                    "component_area_ratio": area_ratio,
+                    "centre_distance": centre_distance,
+                }
+
+            padding = max(8, int(round(max(component_width, component_height) * 0.12)))
+            left = max(0, x - padding)
+            top = max(0, y - padding)
+            right = min(width, x + component_width + padding)
+            bottom = min(height, y + component_height + padding)
+
+            # Reject an almost-full-frame component. It normally means a broad
+            # background scene instead of a close, focused stem capture.
+            roi_area_ratio = float((right - left) * (bottom - top)) / image_area
+            if roi_area_ratio > 0.92 and area_ratio < 0.45:
+                return None, {
+                    "is_stem": False,
+                    "reason": "stem_not_distinct_from_background",
+                    "component_area_ratio": area_ratio,
+                    "roi_area_ratio": roi_area_ratio,
+                }
+
+            stem_region = image.crop((left, top, right, bottom))
+            return stem_region, {
+                "is_stem": True,
+                "component_area_ratio": area_ratio,
+                "roi_area_ratio": roi_area_ratio,
+                "centre_distance": centre_distance,
+                "bbox": [left, top, right, bottom],
+            }
+        except Exception as exc:
+            logger.error(f"Error extracting stem region: {str(exc)}")
+            return None, {"is_stem": False, "reason": "stem_roi_error"}
+
     def generate_image_tiles(self, image):
         """Create overlapping tiles so separate stem regions can be analyzed independently."""
         try:
@@ -610,6 +718,22 @@ class ImprovedDiseaseDetection:
                     "reason": "invalid_subject",
                     "subject_validation": subject_validation,
                 }
+
+            stem_image, stem_validation = self.extract_stem_region(image)
+            subject_validation["stem_region"] = stem_validation
+            if stem_image is None:
+                return {
+                    "success": True,
+                    "disease_name": None,
+                    "confidence": 0,
+                    "message": "No disease detection found. Please keep one dragon fruit stem centred in the image.",
+                    "reason": stem_validation.get("reason", "stem_not_found"),
+                    "subject_validation": subject_validation,
+                }
+
+            # From this point forward the model and the tile generator receive
+            # only the stem region, never the full scene/background.
+            image = stem_image
 
             # Analyze image quality first
             quality = self.analyze_image_quality(image)
