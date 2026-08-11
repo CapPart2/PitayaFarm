@@ -13,6 +13,7 @@ import hashlib
 import secrets
 import smtplib
 import sqlite3
+import shutil
 from email.message import EmailMessage
 from disease_database import (
     get_disease_info,
@@ -1505,6 +1506,58 @@ def get_admin_dashboard_metrics():
     except Exception as e:
         logger.error(f"Admin dashboard metrics error: {str(e)}")
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route("/api/admin/database/restore", methods=["POST"])
+@admin_required
+def restore_database_backup():
+    """Restore a verified SQLite backup into the persistent production volume.
+
+    This endpoint is intentionally admin-token protected. It is used for a
+    controlled migration from the local capstone database and keeps a timestamped
+    copy of the current production database before replacing it.
+    """
+    backup_file = request.files.get("database")
+    if not backup_file or not backup_file.filename:
+        return jsonify({"success": False, "error": "Database file is required"}), 400
+
+    if not backup_file.filename.lower().endswith(".db"):
+        return jsonify({"success": False, "error": "Only SQLite .db files are allowed"}), 400
+
+    target_path = db_manager.db_path
+    temp_path = f"{target_path}.restore-{uuid.uuid4().hex}.tmp"
+    try:
+        backup_file.save(temp_path)
+
+        # Do not replace production data with a corrupt or unrelated upload.
+        conn = sqlite3.connect(temp_path)
+        integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        conn.close()
+        required_tables = {"users", "disease_detections", "yield_predictions"}
+        if integrity != "ok" or not required_tables.issubset(tables):
+            return (
+                jsonify({"success": False, "error": "Invalid PITAYA database backup"}),
+                400,
+            )
+
+        if os.path.exists(target_path):
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            shutil.copy2(target_path, f"{target_path}.backup_{timestamp}")
+        os.replace(temp_path, target_path)
+        logger.info("Production database restored from verified admin backup")
+        return jsonify({"success": True, "message": "Database restored successfully"}), 200
+    except Exception as e:
+        logger.exception("Database restore failed")
+        return jsonify({"success": False, "error": str(e)}), 500
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 
 # ===== ADMIN: USER MANAGEMENT ENDPOINTS =====
