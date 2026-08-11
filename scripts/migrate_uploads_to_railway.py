@@ -9,15 +9,79 @@ restarted after a network interruption.
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import sys
 import time
+import uuid
 from pathlib import Path
-
-import requests
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 CHUNK_SIZE = 20 * 1024 * 1024
 RETRY_COUNT = 5
+
+
+class HttpResponse:
+    def __init__(self, status_code, content):
+        self.status_code = status_code
+        self.content = content
+        self.text = content.decode("utf-8", errors="replace")
+
+    @property
+    def ok(self):
+        return 200 <= self.status_code < 300
+
+    def json(self):
+        return json.loads(self.text)
+
+
+class MigrationSession:
+    """Small standard-library HTTP client so the migrator has no extra dependency."""
+
+    def __init__(self, admin_token):
+        self.headers = {"Authorization": f"Bearer {admin_token}"}
+
+    def post(self, url, json=None, data=None, files=None, timeout=None):
+        headers = dict(self.headers)
+        if json is not None:
+            payload = __import__("json").dumps(json).encode("utf-8")
+            headers["Content-Type"] = "application/json"
+        elif files:
+            boundary = f"----pitaya-{uuid.uuid4().hex}"
+            headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+            sections = []
+            for name, value in (data or {}).items():
+                sections.extend(
+                    [
+                        f"--{boundary}\r\n".encode(),
+                        f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                        str(value).encode(),
+                        b"\r\n",
+                    ]
+                )
+            for name, (filename, chunk, content_type) in files.items():
+                sections.extend(
+                    [
+                        f"--{boundary}\r\n".encode(),
+                        f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode(),
+                        f"Content-Type: {content_type}\r\n\r\n".encode(),
+                        chunk,
+                        b"\r\n",
+                    ]
+                )
+            sections.append(f"--{boundary}--\r\n".encode())
+            payload = b"".join(sections)
+        else:
+            payload = b""
+
+        request = Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urlopen(request, timeout=300) as response:
+                return HttpResponse(response.status, response.read())
+        except HTTPError as error:
+            return HttpResponse(error.code, error.read())
 
 
 def request_with_retry(method, url, **kwargs):
@@ -28,7 +92,7 @@ def request_with_retry(method, url, **kwargs):
             if response.status_code < 500:
                 return response
             last_error = RuntimeError(f"Server returned {response.status_code}: {response.text[:300]}")
-        except requests.RequestException as error:
+        except (OSError, URLError) as error:
             last_error = error
         time.sleep(min(30, 2**attempt))
     raise RuntimeError(f"Request failed after {RETRY_COUNT} attempts: {last_error}")
@@ -95,9 +159,15 @@ def migrate_file(session, base_url, root, path):
 def main():
     parser = argparse.ArgumentParser(description="Resumably migrate PITAYA uploads to Railway.")
     parser.add_argument("--url", required=True, help="Railway public app URL")
-    parser.add_argument("--admin-token", required=True, help="Railway ADMIN_TOKEN")
+    parser.add_argument(
+        "--admin-token",
+        default=os.environ.get("PITAYA_MIGRATION_ADMIN_TOKEN"),
+        help="Railway ADMIN_TOKEN (or set PITAYA_MIGRATION_ADMIN_TOKEN)",
+    )
     parser.add_argument("--uploads", default="uploads", help="Local uploads folder")
     args = parser.parse_args()
+    if not args.admin_token:
+        parser.error("--admin-token or PITAYA_MIGRATION_ADMIN_TOKEN is required")
 
     root = Path(args.uploads).resolve()
     if not root.is_dir():
@@ -107,8 +177,7 @@ def main():
     total_bytes = sum(path.stat().st_size for path in files)
     print(f"Migrating {len(files):,} files ({total_bytes / 1024**3:.2f} GB). Restarting this command is safe.")
 
-    session = requests.Session()
-    session.headers.update({"Authorization": f"Bearer {args.admin_token}"})
+    session = MigrationSession(args.admin_token)
     base_url = args.url.rstrip("/")
     migrated_bytes = 0
     skipped_files = 0
