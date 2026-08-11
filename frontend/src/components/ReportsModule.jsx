@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { getPitayaUserScopeHeaders } from '../api/userScope';
 
 const ReportsModule = () => {
-  const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5001').replace(/\/$/, '');
+  const API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE_URL || '').replace(/\/$/, '');
   const [reports, setReports] = useState([]);
   const [filteredReports, setFilteredReports] = useState([]);
   const [loading, setLoading] = useState(true);

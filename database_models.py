@@ -15,7 +15,19 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
-    def __init__(self, db_path="pitaya_database.db"):
+    def __init__(self, db_path=None):
+        # Railway's build filesystem is replaced on each deploy.  Keeping the
+        # database in PITAYA_DATA_DIR lets a mounted volume preserve records.
+        data_dir = os.environ.get("PITAYA_DATA_DIR")
+        if db_path is None:
+            db_path = os.environ.get(
+                "PITAYA_DATABASE_PATH",
+                os.path.join(data_dir, "pitaya_database.db")
+                if data_dir
+                else "pitaya_database.db",
+            )
+        if data_dir:
+            os.makedirs(data_dir, exist_ok=True)
         self.db_path = db_path
         self.init_database()
 
@@ -234,7 +246,9 @@ class DatabaseManager:
         if admin_count == 0:
             import hashlib
 
-            default_password = hashlib.sha256("admin123".encode()).hexdigest()
+            default_password = hashlib.sha256(
+                os.environ.get("DEFAULT_ADMIN_PASSWORD", "admin123").encode()
+            ).hexdigest()
             cursor.execute(
                 """
                 INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
@@ -251,33 +265,34 @@ class DatabaseManager:
                 ),
             )
 
-        # Insert a test/user account for development if not exists
-        try:
-            cursor.execute(
-                "SELECT COUNT(*) FROM users WHERE Username = ?", ("robabarintos",)
-            )
-            if cursor.fetchone()[0] == 0:
-                import hashlib as _hashlib
-
-                test_pw = _hashlib.sha256("robrob12".encode()).hexdigest()
+        # Development accounts must never be added to a public deployment.
+        if os.environ.get("PITAYA_SEED_DEMO_USERS", "").lower() in {"1", "true", "yes"}:
+            try:
                 cursor.execute(
-                    """
-                    INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                    (
-                        "robabarintos",
-                        test_pw,
-                        "robabarintos@example.com",
-                        "Rob",
-                        "Barintos",
-                        "user",
-                        "active",
-                    ),
+                    "SELECT COUNT(*) FROM users WHERE Username = ?", ("robabarintos",)
                 )
-        except Exception:
-            # Non-fatal; continue initialization
-            pass
+                if cursor.fetchone()[0] == 0:
+                    import hashlib as _hashlib
+
+                    test_pw = _hashlib.sha256("robrob12".encode()).hexdigest()
+                    cursor.execute(
+                        """
+                        INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                        (
+                            "robabarintos",
+                            test_pw,
+                            "robabarintos@example.com",
+                            "Rob",
+                            "Barintos",
+                            "user",
+                            "active",
+                        ),
+                    )
+            except Exception:
+                # Non-fatal; continue initialization
+                pass
 
         # Insert default site settings if not exists
         default_settings = [

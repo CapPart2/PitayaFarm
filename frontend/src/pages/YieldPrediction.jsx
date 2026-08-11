@@ -27,7 +27,7 @@ const DASHBOARD_MEDIA_ORIGIN = (() => {
     import.meta.env.VITE_DASHBOARD_MEDIA_ORIGIN ||
     import.meta.env.VITE_DASHBOARD_API_BASE ||
     import.meta.env.VITE_DASHBOARD_API_BASE_URL ||
-    'http://192.168.1.59:5001'
+    ''
 
   const normalized = String(configuredBase).replace(/\/api\/dashboard\/?$/, '')
 

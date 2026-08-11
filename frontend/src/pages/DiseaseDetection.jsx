@@ -182,7 +182,7 @@ export default function DiseaseDetection() {
             formData.append('image', selectedFile)
           }
           
-          return fetch(`http://192.168.1.59:5001/api/dashboard/disease-detection`, {
+          return fetch('/api/dashboard/disease-detection', {
             method: 'POST',
             headers: getPitayaUserScopeHeaders(),
             body: formData
@@ -219,7 +219,7 @@ export default function DiseaseDetection() {
           formData.append('image', selectedFile)
         }
         
-        const response = await fetch(`http://192.168.1.59:5001/api/dashboard/disease-detection`, {
+        const response = await fetch('/api/dashboard/disease-detection', {
           method: 'POST',
           headers: getPitayaUserScopeHeaders(),
           body: formData

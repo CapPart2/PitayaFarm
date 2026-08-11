@@ -1,0 +1,15 @@
+.git
+.env
+venv
+env
+__pycache__
+*.py[cod]
+uploads
+pitaya_database.db
+frontend/node_modules
+frontend/dist
+frontend/android
+Mature Dragon Fruit
+oversample
+Yield_detection/runs
+*.ipynb

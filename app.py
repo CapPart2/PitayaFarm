@@ -69,7 +69,9 @@ class_names = [
 ]
 
 # Upload configuration
-UPLOAD_FOLDER = "uploads"
+# Use the Railway volume when configured so uploaded evidence survives a
+# redeploy.  Local development continues to use the existing uploads folder.
+UPLOAD_FOLDER = os.path.join(os.environ.get("PITAYA_DATA_DIR", "."), "uploads")
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif"}
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)

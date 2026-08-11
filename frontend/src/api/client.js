@@ -3,8 +3,8 @@
 
 import { getPitayaUserScopeHeaders } from './userScope';
 
-const API_BASE = 'http://192.168.1.59:5000';
-const DASHBOARD_API_BASE = 'http://192.168.1.59:5001/api/dashboard';
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+const DASHBOARD_API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE || '/api/dashboard').replace(/\/$/, '');
 
 // Cache for CSRF token
 let csrfToken = null;

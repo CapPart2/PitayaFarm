@@ -57,7 +57,7 @@ export default function Login() {
 
     setLoading(true)
     try {
-      const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000'
+      const API_BASE = import.meta.env.VITE_API_BASE || ''
 
       if (requiresVerification) {
         const verifyRes = await fetch(`${API_BASE}/api/auth/verify-login-code`, {

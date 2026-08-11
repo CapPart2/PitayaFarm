@@ -5,7 +5,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import SeverityBadge from '../components/SeverityBadge';
 
 export default function Alerts() {
-  const API_BASE = (import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5001').replace(/\/$/, '');
+  const API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE_URL || '').replace(/\/$/, '');
   const [alerts, setAlerts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);

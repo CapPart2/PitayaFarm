@@ -2,7 +2,7 @@
 
 import { getPitayaUserScopeHeaders } from './userScope';
 
-const API_BASE = 'http://192.168.1.59:5000';
+const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 
 // Store admin token in localStorage
 const ADMIN_TOKEN_KEY = 'pitaya_admin_token';
@@ -232,4 +232,3 @@ export {
     adminUsersApi, adminYieldApi, clearAdminToken, getAdminToken,
     setAdminToken
 };
-
