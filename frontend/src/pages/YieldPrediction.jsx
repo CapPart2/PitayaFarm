@@ -21,6 +21,7 @@ const container = {
 const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }
 
 const CHART_COLORS = { line: '#2f6a21', bar: '#3c7b2b', barAlt: '#6bb854' }
+const MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024
 
 const DASHBOARD_MEDIA_ORIGIN = (() => {
   const configuredBase =
@@ -154,6 +155,11 @@ export default function YieldPrediction() {
     const file = e.target.files?.[0]
     if (!file || !file.type.startsWith('video/')) {
       setVideoError('Please select a video file (mp4, mov, etc.).')
+      return
+    }
+    if (file.size > MAX_VIDEO_UPLOAD_BYTES) {
+      setVideoError('Video is too large. Please select a video smaller than 500 MB.')
+      e.target.value = ''
       return
     }
     setVideoError(null)
