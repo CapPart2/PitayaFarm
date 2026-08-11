@@ -4,6 +4,7 @@ from functools import wraps
 from PIL import Image
 from io import BytesIO
 import tensorflow as tf
+import keras
 import numpy as np
 import os
 import logging
@@ -191,7 +192,10 @@ def init_model():
         for model_path in model_paths:
             if os.path.exists(model_path):
                 try:
-                    model = tf.keras.models.load_model(model_path)
+                    # The production model was saved by Keras 3.  Loading with
+                    # standalone Keras (rather than legacy tf.keras) keeps its
+                    # architecture format compatible on Railway.
+                    model = keras.models.load_model(model_path, compile=False)
                     logger.info(f" Model loaded: {model_path}")
                     logger.info(f"   Model input shape: {model.input_shape}")
                     logger.info(f"   Model output shape: {model.output_shape}")
@@ -782,6 +786,22 @@ def get_library_with_translations():
 
 
 # ===== LIBRARY ENDPOINT =====
+@app.route("/api/library", methods=["GET"])
+@app.route("/api/library/", methods=["GET"])
+def get_library_api():
+    """Return the disease library in the array format used by the web app."""
+    try:
+        diseases = []
+        for disease_name in get_all_diseases():
+            disease_info = get_disease_info(disease_name)
+            if disease_info:
+                diseases.append({"name": disease_name, **disease_info})
+        return jsonify({"success": True, "data": diseases}), 200
+    except Exception as e:
+        logger.error(f"Library API error: {str(e)}")
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 @app.route("/library", methods=["GET"])
 def get_library():
     """Get all disease information for library module with persistent counts"""
@@ -791,7 +811,7 @@ def get_library():
         try:
             # Assuming Dashboard API is running on localhost:5001
             response = requests.get(
-                "http://localhost:5001/api/dashboard/disease-stats", timeout=1
+                "http://127.0.0.1:5001/api/dashboard/disease-stats", timeout=1
             )
             if response.status_code == 200:
                 root = response.json()

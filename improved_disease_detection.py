@@ -6,6 +6,7 @@ Fixes accuracy issues with proper preprocessing, confidence thresholds, and vali
 
 import os
 import tensorflow as tf
+import keras
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
 import logging
@@ -61,7 +62,9 @@ class ImprovedDiseaseDetection:
             for model_path in model_paths:
                 if os.path.exists(model_path):
                     try:
-                        self.model = tf.keras.models.load_model(model_path)
+                        # The .keras file was saved with Keras 3, so use its
+                        # native loader instead of the legacy tf.keras loader.
+                        self.model = keras.models.load_model(model_path, compile=False)
                         logger.info(f"Loaded model: {model_path}")
                         logger.info(f"   Input shape: {self.model.input_shape}")
                         logger.info(f"   Output shape: {self.model.output_shape}")
