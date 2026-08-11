@@ -16,11 +16,14 @@ export default function Signup() {
   const [username, setUsername] = useState('')
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [emailTouched, setEmailTouched] = useState(false)
   const [usernameTouched, setUsernameTouched] = useState(false)
   const [nameTouched, setNameTouched] = useState(false)
   const [passwordTouched, setPasswordTouched] = useState(false)
+  const [confirmPasswordTouched, setConfirmPasswordTouched] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -30,11 +33,17 @@ export default function Signup() {
   const usernameError = (submitAttempted || usernameTouched) && !safeTrim(username) ? 'Username is required.' : ''
   const passwordError = (submitAttempted || passwordTouched) && !safeTrim(password)
     ? 'Password is required.'
-    : password.length > 8
-      ? 'Password must not exceed 8 characters.'
+    : password.length < 8
+      ? 'Password must be at least 8 characters.'
+      : ''
+  const confirmPasswordError = (submitAttempted || confirmPasswordTouched) && !safeTrim(confirmPassword)
+    ? 'Please re-enter your password.'
+    : confirmPassword !== password
+      ? 'Passwords do not match.'
       : ''
 
-  const canSubmit = [name, email, username, password].every((value) => safeTrim(value).length > 0) && password.length <= 8
+  const canSubmit = [name, email, username, password, confirmPassword].every((value) => safeTrim(value).length > 0)
+    && password.length >= 8 && password === confirmPassword
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -43,6 +52,7 @@ export default function Signup() {
     setEmailTouched(true)
     setUsernameTouched(true)
     setPasswordTouched(true)
+    setConfirmPasswordTouched(true)
     setError('')
 
     if (!canSubmit) return
@@ -58,12 +68,11 @@ export default function Signup() {
           username: safeTrim(username),
           name: safeTrim(name),
           password,
+          confirm_password: confirmPassword,
         }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
-        alert(data.message || 'Account created — please wait for admin verification')
-        localStorage.setItem('pitayaLastSignupEmail', safeTrim(email))
         // Clear any existing local user data so the new account starts empty
         try {
           localStorage.removeItem('pitayaUser')
@@ -73,7 +82,14 @@ export default function Signup() {
         } catch (e) {
           console.warn('Failed clearing local storage on signup', e)
         }
-        navigate('/login')
+        navigate('/verify-email', {
+          replace: true,
+          state: {
+            email: safeTrim(email),
+            maskedEmail: data.verification?.masked_email || safeTrim(email),
+            challengeId: data.verification?.challenge_id || '',
+          },
+        })
       } else {
         setError(data.error || 'Signup failed')
       }
@@ -205,7 +221,6 @@ export default function Signup() {
                     onChange={(e) => setPassword(e.target.value)}
                     onBlur={() => setPasswordTouched(true)}
                     autoComplete="new-password"
-                    maxLength={8}
                     className={`w-full min-h-[44px] rounded-xl border bg-white px-4 py-3 pr-12 text-gray-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-pitaya-mint placeholder:text-gray-400 ${
                       passwordError ? 'border-red-300 focus:ring-red-300' : 'border-gray-200 focus:border-pitaya-mint'
                     }`}
@@ -226,10 +241,46 @@ export default function Signup() {
                     )}
                   </button>
                 </div>
-                <p id="password-help" className="mt-2 text-xs text-gray-600">Maximum 8 characters.</p>
+                <p id="password-help" className="mt-2 text-xs text-gray-600">Use at least 8 characters.</p>
                 {passwordError && (
                   <p id="password-error" className="mt-2 text-sm text-red-600">
                     {passwordError}
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label htmlFor="confirmPassword" className="block text-sm font-semibold text-gray-700">
+                  Re-enter Password
+                </label>
+                <div className="relative mt-2">
+                  <input
+                    id="confirmPassword"
+                    name="confirmPassword"
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    onBlur={() => setConfirmPasswordTouched(true)}
+                    autoComplete="new-password"
+                    className={`w-full min-h-[44px] rounded-xl border bg-white px-4 py-3 pr-14 text-gray-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-pitaya-mint placeholder:text-gray-400 ${
+                      confirmPasswordError ? 'border-red-300 focus:ring-red-300' : 'border-gray-200 focus:border-pitaya-mint'
+                    }`}
+                    placeholder="Re-enter your password"
+                    aria-invalid={Boolean(confirmPasswordError)}
+                    aria-describedby={confirmPasswordError ? 'confirm-password-error' : undefined}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword((visible) => !visible)}
+                    className="absolute inset-y-0 right-0 flex w-14 items-center justify-center text-xs font-semibold text-gray-500 hover:text-pitaya-deep focus:outline-none focus:ring-2 focus:ring-pitaya-mint focus:ring-inset"
+                    aria-label={showConfirmPassword ? 'Hide re-entered password' : 'Show re-entered password'}
+                  >
+                    {showConfirmPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+                {confirmPasswordError && (
+                  <p id="confirm-password-error" className="mt-2 text-sm text-red-600">
+                    {confirmPasswordError}
                   </p>
                 )}
               </div>

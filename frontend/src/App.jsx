@@ -19,6 +19,7 @@ import Landing from './pages/Landing'
 import Loading from './pages/Loading'
 import Login from './pages/Login'
 import Signup from './pages/Signup'
+import VerifyEmail from './pages/VerifyEmail'
 import Profile from './pages/Profile'
 import Report from './pages/Report'
 import Reports from './pages/Reports'
@@ -86,6 +87,7 @@ function App() {
       <Route path="/get-started" element={<GetStarted />} />
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
       <Route path="/admin/login" element={<Navigate to="/login" replace />} />
 
       <Route

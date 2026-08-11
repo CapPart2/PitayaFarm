@@ -926,6 +926,29 @@ def init_login_verification_table():
     conn.close()
 
 
+def init_signup_verification_table():
+    """Create storage for the email confirmation required after registration."""
+    conn = sqlite3.connect(db_manager.db_path)
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS signup_verification_codes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            challenge_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER NOT NULL,
+            email TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts INTEGER DEFAULT 0,
+            used INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
 def mask_email(email: str) -> str:
     """Return a masked email for API responses."""
     if not email or "@" not in email:
@@ -961,6 +984,58 @@ def send_login_verification_email(recipient_email: str, code: str) -> None:
         smtp.starttls()
         smtp.login(smtp_username, smtp_password)
         smtp.send_message(message)
+
+
+def send_signup_verification_email(recipient_email: str, code: str) -> None:
+    """Send the code that confirms ownership of a new account's email address."""
+    smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = os.getenv("SMTP_USERNAME", "jacofarm1@gmail.com")
+    smtp_password = os.getenv("SMTP_PASSWORD", "daml mkle iehe ybny")
+
+    message = EmailMessage()
+    message["Subject"] = "Confirm your PITAYA email address"
+    message["From"] = f"PITAYA Application <{smtp_username}>"
+    message["To"] = recipient_email
+    message.set_content(
+        "Confirm your PITAYA account with this code: "
+        f"{code}\n\n"
+        "This code expires in 10 minutes. If you did not create this account, you can ignore this email."
+    )
+
+    with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as smtp:
+        smtp.starttls()
+        smtp.login(smtp_username, smtp_password)
+        smtp.send_message(message)
+
+
+def create_signup_verification_challenge(user_id: int, email: str) -> dict:
+    """Create a new confirmation code for a pending registration and email it."""
+    init_signup_verification_table()
+    raw_code = f"{secrets.randbelow(1000000):06d}"
+    code_hash = hashlib.sha256(raw_code.encode("utf-8")).hexdigest()
+    challenge_id = uuid.uuid4().hex
+    expires_at = (datetime.datetime.now() + datetime.timedelta(minutes=10)).isoformat()
+
+    conn = sqlite3.connect(db_manager.db_path)
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE signup_verification_codes SET used = 1 WHERE user_id = ? AND used = 0",
+        (user_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO signup_verification_codes
+        (challenge_id, user_id, email, code_hash, expires_at, attempts, used)
+        VALUES (?, ?, ?, ?, ?, 0, 0)
+        """,
+        (challenge_id, user_id, email, code_hash, expires_at),
+    )
+    conn.commit()
+    conn.close()
+
+    send_signup_verification_email(email, raw_code)
+    return {"challenge_id": challenge_id, "email": email, "expires_in_seconds": 600}
 
 
 def create_login_verification_challenge(user: dict) -> dict:
@@ -1071,14 +1146,15 @@ def api_register():
         email = (data.get("email") or "").strip()
         username = (data.get("username") or "").strip()
         password = data.get("password") or ""
+        confirm_password = data.get("confirm_password") or ""
         name = (data.get("name") or "").strip()
 
-        if not email or not username or not password or not name:
+        if not email or not username or not password or not confirm_password or not name:
             return (
                 jsonify(
                     {
                         "success": False,
-                        "error": "All fields are required (email, name, username, password)",
+                        "error": "All fields are required, including password confirmation.",
                     }
                 ),
                 400,
@@ -1091,13 +1167,16 @@ def api_register():
         if not email_re.match(email):
             return jsonify({"success": False, "error": "Invalid email format"}), 400
 
-        if len(password) > 8:
+        if len(password) < 8:
             return (
                 jsonify(
-                    {"success": False, "error": "Password must not exceed 8 characters"}
+                    {"success": False, "error": "Password must be at least 8 characters."}
                 ),
                 400,
             )
+
+        if password != confirm_password:
+            return jsonify({"success": False, "error": "Passwords do not match."}), 400
 
         # Prevent duplicate username/email
         conn = __import__("sqlite3").connect(db_manager.db_path)
@@ -1116,7 +1195,7 @@ def api_register():
         first_name = parts[0]
         last_name = parts[1] if len(parts) > 1 else ""
 
-        # Create user as a regular 'user' with status 'pending'
+        # The account remains pending until the owner confirms their email address.
         user_id = db_manager.create_user(
             username=username,
             password=password,
@@ -1138,11 +1217,30 @@ def api_register():
 
         conn.close()
 
+        try:
+            challenge = create_signup_verification_challenge(user_id, email)
+        except Exception:
+            logger.exception("Failed to send signup confirmation email")
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "We could not send the confirmation email. Please try again later.",
+                    }
+                ),
+                500,
+            )
+
         return (
             jsonify(
                 {
                     "success": True,
-                    "message": "Account created successfully! Please wait for the admin to verify your account before you can log in.",
+                    "message": "Account created. Confirm your email address to finish signing up.",
+                    "verification": {
+                        "challenge_id": challenge["challenge_id"],
+                        "masked_email": mask_email(challenge["email"]),
+                        "expires_in_seconds": challenge["expires_in_seconds"],
+                    },
                 }
             ),
             201,
@@ -1152,37 +1250,122 @@ def api_register():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route("/api/auth/verify-signup-email", methods=["POST"])
+def api_verify_signup_email():
+    """Confirm a newly registered user's email and activate the account."""
+    try:
+        data = request.get_json() or {}
+        challenge_id = str(data.get("challenge_id") or "").strip()
+        code = str(data.get("code") or "").strip()
+        if not challenge_id or not code:
+            return jsonify({"success": False, "error": "Confirmation code is required."}), 400
+        if not code.isdigit() or len(code) != 6:
+            return jsonify({"success": False, "error": "Enter the 6-digit confirmation code."}), 400
+
+        init_signup_verification_table()
+        conn = sqlite3.connect(db_manager.db_path)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, user_id, code_hash, expires_at, attempts, used
+            FROM signup_verification_codes WHERE challenge_id = ?
+            """,
+            (challenge_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"success": False, "error": "Confirmation request not found."}), 404
+        if int(row["used"]):
+            conn.close()
+            return jsonify({"success": False, "error": "This confirmation code has already been used."}), 400
+        if int(row["attempts"]) >= 5:
+            conn.close()
+            return jsonify({"success": False, "error": "Too many attempts. Request a new code."}), 429
+        if datetime.datetime.now() > datetime.datetime.fromisoformat(str(row["expires_at"])):
+            cur.execute("UPDATE signup_verification_codes SET used = 1 WHERE id = ?", (row["id"],))
+            conn.commit()
+            conn.close()
+            return jsonify({"success": False, "error": "This code has expired. Request a new code."}), 400
+
+        if hashlib.sha256(code.encode("utf-8")).hexdigest() != row["code_hash"]:
+            cur.execute("UPDATE signup_verification_codes SET attempts = attempts + 1 WHERE id = ?", (row["id"],))
+            conn.commit()
+            conn.close()
+            return jsonify({"success": False, "error": "That confirmation code is incorrect."}), 401
+
+        cur.execute("UPDATE signup_verification_codes SET used = 1 WHERE id = ?", (row["id"],))
+        conn.commit()
+        conn.close()
+
+        user = db_manager.get_user_by_id(int(row["user_id"]))
+        if not user:
+            return jsonify({"success": False, "error": "Account not found."}), 404
+        db_manager.update_user(user_id=user.get("UserID"), status="active")
+        db_manager.create_user_log(
+            user_id=user.get("UserID"),
+            action="EMAIL_CONFIRMED",
+            description=f"Email address confirmed for {user.get('Username')}",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+        return jsonify({"success": True, "message": "Email confirmed. You can now log in."}), 200
+    except Exception:
+        logger.exception("Signup email verification error")
+        return jsonify({"success": False, "error": "Unable to confirm email right now."}), 500
+
+
+@app.route("/api/auth/resend-signup-code", methods=["POST"])
+def api_resend_signup_code():
+    """Send a fresh confirmation code for an unconfirmed account."""
+    try:
+        data = request.get_json() or {}
+        email = str(data.get("email") or "").strip()
+        if not email:
+            return jsonify({"success": False, "error": "Email is required."}), 400
+        user = db_manager.get_user_by_email(email)
+        if not user or (user.get("Status") or "").lower() != "pending":
+            return jsonify({"success": False, "error": "No unconfirmed account was found for this email."}), 404
+        challenge = create_signup_verification_challenge(int(user["UserID"]), email)
+        return jsonify({
+            "success": True,
+            "message": "A new confirmation code has been sent.",
+            "verification": {
+                "challenge_id": challenge["challenge_id"],
+                "masked_email": mask_email(challenge["email"]),
+                "expires_in_seconds": challenge["expires_in_seconds"],
+            },
+        }), 200
+    except Exception:
+        logger.exception("Resend signup confirmation error")
+        return jsonify({"success": False, "error": "Unable to resend the code right now."}), 500
+
+
 @app.route("/api/auth/login", methods=["POST"])
 def api_login():
     try:
         data = request.get_json() or {}
-        logger.info(f"Login request payload: {data}")
         logger.info(f"Client IP: {get_client_ip()}")
-        # accept either username or email for login
-        identifier = (data.get("username") or data.get("email") or "").strip()
+        email = (data.get("email") or "").strip()
         password = data.get("password") or ""
 
-        if not identifier or not password:
+        if not email or not password:
             return (
                 jsonify(
                     {
                         "success": False,
-                        "error": "Email/username and password are required",
+                        "error": "Email and password are required",
                     }
                 ),
                 400,
             )
 
-        # Lookup user by username first, then by email
-        user = None
-        if identifier:
-            user = db_manager.get_user_by_username(identifier)
-            if not user:
-                user = db_manager.get_user_by_email(identifier)
+        user = db_manager.get_user_by_email(email)
         if not user:
             return (
                 jsonify(
-                    {"success": False, "error": "Invalid email/username or password"}
+                    {"success": False, "error": "Invalid email or password"}
                 ),
                 401,
             )
@@ -1191,7 +1374,7 @@ def api_login():
         if pw_hash != user.get("PasswordHash"):
             return (
                 jsonify(
-                    {"success": False, "error": "Invalid email/username or password"}
+                    {"success": False, "error": "Invalid email or password"}
                 ),
                 401,
             )
@@ -1202,7 +1385,7 @@ def api_login():
                 jsonify(
                     {
                         "success": False,
-                        "error": "Your account is still waiting for admin verification.",
+                        "error": "Please confirm your email address before logging in.",
                     }
                 ),
                 403,
@@ -1216,54 +1399,23 @@ def api_login():
             # Treat unknown statuses as inactive
             return jsonify({"success": False, "error": "Account is not active"}), 403
 
-        # Check if user is admin - skip email verification for admins
-        user_role = (user.get("Role") or "").lower()
-        is_admin = user_role == "admin"
-
-        if is_admin:
-            # Admin login without email verification
-            logger.info(
-                f"Admin user {user.get('Username')} logging in without email verification"
-            )
-            db_manager.create_user_log(
-                user_id=user.get("UserID"),
-                action="LOGIN",
-                description=f"Admin {user.get('Username')} logged in",
-                ip_address=get_client_ip(),
-                user_agent=request.headers.get("User-Agent"),
-            )
-            return jsonify(build_login_success_payload(user)), 200
-
-        # Regular users require email verification code before final sign-in.
-        try:
-            challenge = create_login_verification_challenge(user)
-        except Exception as email_exc:
-            logger.exception("Failed to create login verification challenge")
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": f"Unable to send verification code: {email_exc}",
-                    }
-                ),
-                500,
-            )
-
-        return (
-            jsonify(
-                {
-                    "success": True,
-                    "requires_verification": True,
-                    "message": "Verification code sent to your email.",
-                    "verification": {
-                        "challenge_id": challenge["challenge_id"],
-                        "masked_email": mask_email(challenge["email"]),
-                        "expires_in_seconds": challenge["expires_in_seconds"],
-                    },
-                }
-            ),
-            200,
+        # Email is confirmed during sign-up; login needs only email and password.
+        conn = sqlite3.connect(db_manager.db_path)
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE users SET LastLogin = ? WHERE UserID = ?",
+            (datetime.datetime.now().isoformat(), user.get("UserID")),
         )
+        conn.commit()
+        conn.close()
+        db_manager.create_user_log(
+            user_id=user.get("UserID"),
+            action="LOGIN",
+            description=f"User {user.get('Username')} logged in",
+            ip_address=get_client_ip(),
+            user_agent=request.headers.get("User-Agent"),
+        )
+        return jsonify(build_login_success_payload(user)), 200
 
     except Exception as e:
         logger.exception("Login error")

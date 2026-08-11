@@ -1,5 +1,5 @@
 import { motion } from 'framer-motion'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { setAdminToken } from '../api/adminApi'
 import { getPitayaUserScopeId, getScopedStorageKey } from '../api/userScope'
@@ -15,19 +15,6 @@ export default function Login() {
   const navigate = useNavigate()
   const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
 
-  useEffect(() => {
-    document.documentElement.classList.remove('dark')
-
-    try {
-      const rememberedSignupEmail = localStorage.getItem('pitayaLastSignupEmail')
-      if (rememberedSignupEmail && !safeTrim(email)) {
-        setEmail(rememberedSignupEmail)
-      }
-    } catch {
-      // ignore localStorage read issues
-    }
-  }, [])
-
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
@@ -36,10 +23,6 @@ export default function Login() {
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [requiresVerification, setRequiresVerification] = useState(false)
-  const [challengeId, setChallengeId] = useState('')
-  const [verificationCode, setVerificationCode] = useState('')
-  const [verificationHint, setVerificationHint] = useState('')
 
   const emailError = (submitAttempted || emailTouched) && !safeTrim(email) ? 'Email is required.' : ''
   const passwordError = (submitAttempted || passwordTouched) && !safeTrim(password) ? 'Password is required.' : ''
@@ -59,87 +42,12 @@ export default function Login() {
     try {
       const API_BASE = import.meta.env.VITE_API_BASE || ''
 
-      if (requiresVerification) {
-        const verifyRes = await fetch(`${API_BASE}/api/auth/verify-login-code`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ challenge_id: challengeId, code: safeTrim(verificationCode) }),
-        })
-        const verifyData = await verifyRes.json()
-        if (!(verifyRes.ok && verifyData.success)) {
-          setError(verifyData.error || 'Verification failed')
-          return
-        }
-
-        const user = verifyData.user || {}
-        const normalized = {
-          UserID: user.UserID,
-          Username: user.Username,
-          Email: user.Email,
-          firstName: user.FirstName || user.firstName || '',
-          lastName: user.LastName || user.lastName || '',
-          Role: user.Role,
-          Status: user.Status,
-        }
-
-        let userPayload = {
-          ...normalized,
-          Username: user.Username,
-          isAdmin: (user.Role || '').toLowerCase() === 'admin',
-          createdAt: Date.now(),
-        }
-
-        const scopedId = getPitayaUserScopeId(userPayload)
-        if (scopedId) {
-          userPayload.scopeId = scopedId
-        }
-
-        try {
-          const profileKey = getScopedStorageKey('userProfile', userPayload)
-          const savedProfile = localStorage.getItem(profileKey)
-          if (savedProfile) {
-            const parsed = JSON.parse(savedProfile)
-            if (parsed.fullName) {
-              const parts = String(parsed.fullName || '').trim().split(/\s+/)
-              const first = parts.shift() || ''
-              const last = parts.join(' ') || ''
-              userPayload.firstName = first
-              userPayload.lastName = last
-            }
-            if (parsed.farmName) {
-              userPayload.farmName = parsed.farmName
-            }
-          }
-        } catch (mergeErr) {
-          console.warn('Failed to merge local userProfile into login payload', mergeErr)
-        }
-
-        localStorage.setItem('pitayaUser', JSON.stringify(userPayload))
-        localStorage.removeItem('pitayaLastSignupEmail')
-
-        if (userPayload.isAdmin) {
-          setAdminToken(verifyData.adminToken || import.meta.env.VITE_ADMIN_TOKEN || 'admin-secret-token-12345')
-        }
-
-        if (userPayload.isAdmin) navigate('/admin/dashboard', { replace: true })
-        else navigate('/app/dashboard', { replace: true })
-        return
-      }
-
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: safeTrim(email), password }),
       })
       const data = await res.json()
-      if (res.ok && data.success && data.requires_verification) {
-        setRequiresVerification(true)
-        setChallengeId(data.verification?.challenge_id || '')
-        setVerificationHint(data.verification?.masked_email || safeTrim(email))
-        setVerificationCode('')
-        setError('')
-        return
-      }
       if (res.ok && data.success) {
         const user = data.user || {}
         // Normalize backend PascalCase keys to camelCase expected by the SPA
@@ -283,14 +191,12 @@ export default function Login() {
                     placeholder="Enter your password"
                     aria-invalid={Boolean(passwordError)}
                     aria-describedby={passwordError ? 'password-error' : undefined}
-                    disabled={requiresVerification}
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword((visible) => !visible)}
                     className="absolute inset-y-0 right-0 flex w-12 items-center justify-center text-gray-500 hover:text-pitaya-deep focus:outline-none focus:ring-2 focus:ring-pitaya-mint focus:ring-inset disabled:cursor-not-allowed disabled:opacity-50"
                     aria-label={showPassword ? 'Hide password' : 'Show password'}
-                    disabled={requiresVerification}
                   >
                     {showPassword ? (
                       <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="m3 3 18 18" /><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2" /><path d="M9.9 4.2A10.7 10.7 0 0 1 12 4c5.5 0 9.3 5.4 9.5 5.7a1 1 0 0 1 0 1.1 18.1 18.1 0 0 1-3 3.7" /><path d="M6.6 6.6A18.4 18.4 0 0 0 2.5 9.7a1 1 0 0 0 0 1.1C2.7 11.1 6.5 16.5 12 16.5c.7 0 1.4-.1 2-.2" /></svg>
@@ -305,27 +211,6 @@ export default function Login() {
                   </p>
                 )}
               </div>
-
-              {requiresVerification && (
-                <div>
-                  <label htmlFor="verificationCode" className="block text-sm font-semibold text-gray-700">
-                    Verification Code
-                  </label>
-                  <input
-                    id="verificationCode"
-                    name="verificationCode"
-                    type="text"
-                    maxLength={6}
-                    value={verificationCode}
-                    onChange={(e) => setVerificationCode(e.target.value.replace(/\D/g, ''))}
-                    className="mt-2 w-full min-h-[44px] rounded-xl border border-gray-200 bg-white px-4 py-3 text-gray-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-pitaya-mint placeholder:text-gray-400"
-                    placeholder="Enter 6-digit code"
-                  />
-                  <p className="mt-2 text-xs text-gray-600">
-                    Verification code sent to {verificationHint || 'your email'}.
-                  </p>
-                </div>
-              )}
 
               <div className="text-center mt-2">
                 <a href="/signup" className="text-sm font-semibold text-pitaya-deep hover:underline">Create Account / Sign Up</a>
@@ -351,10 +236,10 @@ export default function Login() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  {requiresVerification ? 'Verifying code...' : 'Signing in...'}
+                  Signing in...
                 </span>
               ) : (
-                requiresVerification ? 'Verify Code' : 'Login'
+                'Login'
               )}
             </motion.button>
 
