@@ -2549,8 +2549,8 @@ def get_disease_images(disease_name):
                 # Remove duplicates and take first 5
                 unique_images = list(set(found_images))[:5]
                 for img_path in unique_images:
-                    relative_path = os.path.relpath(img_path)
-                    image_urls.append(f'/{relative_path.replace("\\", "/")}')
+                    relative_path = os.path.relpath(img_path).replace("\\", "/")
+                    image_urls.append(f"/{relative_path}")
 
         return (
             jsonify(
@@ -3116,9 +3116,13 @@ def yield_video_detect():
         # Generate URL for original video
         original_video_url = None
         if video_path:
-            original_video_url = (
-                f"/uploads/{os.path.relpath(video_path, 'uploads').replace('\\', '/')}"
-            )
+            original_video_rel = os.path.relpath(video_path, "uploads").replace("\\", "/")
+            original_video_url = f"/uploads/{original_video_rel}"
+
+        annotated_video_url = None
+        if annotated_rel:
+            annotated_video_rel = os.path.relpath(annotated_rel, "uploads").replace("\\", "/")
+            annotated_video_url = f"/uploads/{annotated_video_rel}"
 
         return jsonify(
             {
@@ -3130,11 +3134,7 @@ def yield_video_detect():
                     "source_type": "stream" if stream_url else "upload",
                     "saved_video_path": video_path,
                     "original_video_url": original_video_url,
-                    "annotated_video_url": (
-                        f"/uploads/{os.path.relpath(annotated_rel, 'uploads').replace('\\', '/')}"
-                        if annotated_rel
-                        else None
-                    ),
+                    "annotated_video_url": annotated_video_url,
                     "conf": conf,
                 },
             }
