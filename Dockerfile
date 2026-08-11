@@ -9,10 +9,13 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    TZ=Asia/Manila
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nginx gettext-base libglib2.0-0 libgl1 libgomp1 \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nginx gettext-base tzdata libglib2.0-0 libgl1 libgomp1 \
+    && ln -snf /usr/share/zoneinfo/Asia/Manila /etc/localtime \
+    && echo Asia/Manila > /etc/timezone \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./

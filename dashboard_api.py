@@ -2501,7 +2501,7 @@ def get_disease_images(disease_name):
         # Get the folder name for this disease
         folder_name = folder_mapping.get(disease_name, disease_name)
 
-        # Look for images in the public folder served by Vite
+        # Look for images in the public folder served by Vite.
         oversample_path = f"frontend/public/oversample/Leaf/{folder_name}"
         image_urls = []  # Initialize here
 
@@ -2525,9 +2525,12 @@ def get_disease_images(disease_name):
                 # Encode only spaces (not parentheses or other common chars)
                 url_path = relative_path.replace(" ", "%20")
                 image_urls.append(url_path)
-        else:
-            # Fallback to All Disease folder if no oversample images
-            all_disease_path = "All Disease"
+        if not image_urls:
+            # Fallback to the curated library images copied to Vite's public
+            # output.  The API itself runs from /app, so use the built folder.
+            all_disease_path = os.path.join(
+                os.getcwd(), "frontend", "dist", "All Disease"
+            )
             if os.path.exists(all_disease_path):
                 # Try to find matching image in All Disease folder
                 image_extensions = ["jpg", "jpeg", "png", "webp"]
@@ -2549,8 +2552,8 @@ def get_disease_images(disease_name):
                 # Remove duplicates and take first 5
                 unique_images = list(set(found_images))[:5]
                 for img_path in unique_images:
-                    relative_path = os.path.relpath(img_path).replace("\\", "/")
-                    image_urls.append(f"/{relative_path}")
+                    filename = os.path.basename(img_path)
+                    image_urls.append(f"/All%20Disease/{filename.replace(' ', '%20')}")
 
         return (
             jsonify(
