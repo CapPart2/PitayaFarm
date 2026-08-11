@@ -5,13 +5,23 @@ import { useEffect, useState } from 'react'
 import { getPitayaUserScopeHeaders } from '../api/userScope'
 
 /* ─── helpers ─────────────────────────────────────────────── */
+const MANILA_TIME_ZONE = 'Asia/Manila'
+const parseReportTimestamp = (ts) => {
+  const value = String(ts || '').trim()
+  if (!value) return null
+
+  // Older Railway records were saved as UTC without an offset. Treat only
+  // those offset-free ISO-like values as UTC; new records include +08:00.
+  const hasOffset = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value)
+  return new Date(hasOffset ? value : `${value.replace(' ', 'T')}Z`)
+}
 const fmt = (ts) => {
   if (!ts) return '—'
-  try { return new Date(ts).toLocaleString() } catch { return ts }
+  try { return parseReportTimestamp(ts).toLocaleString('en-PH', { timeZone: MANILA_TIME_ZONE }) } catch { return ts }
 }
 const fmtDate = (ts) => {
   if (!ts) return '—'
-  try { return new Date(ts).toLocaleDateString() } catch { return ts }
+  try { return parseReportTimestamp(ts).toLocaleDateString('en-PH', { timeZone: MANILA_TIME_ZONE }) } catch { return ts }
 }
 const csvEscape = (v) => {
   const s = String(v ?? '')

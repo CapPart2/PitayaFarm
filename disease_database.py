@@ -283,6 +283,23 @@ DISEASE_DATABASE = {
     }
 }
 
+# The Library cards and detail page require a short introduction in addition
+# to the symptoms, causes, treatments, and prevention lists above.
+DISEASE_DESCRIPTIONS = {
+    'Anthracnose': 'Anthracnose is a fungal disease that causes dark, sunken lesions on dragon-fruit stems and fruit, especially in warm and humid conditions.',
+    'Black Spot': 'Black Spot is a fungal disease that creates dark circular spots on dragon-fruit stems. Untreated spots can join together and weaken the plant.',
+    'Brown Spot': 'Brown Spot causes irregular brown lesions on stems and cladodes. It can spread when plants remain wet or stressed.',
+    'Root Rot': 'Root Rot damages the root system of dragon-fruit plants, causing wilting, poor growth, and possible plant collapse when drainage is poor.',
+    'Soft Rot': 'Soft Rot rapidly breaks down infected stem or fruit tissue, leaving soft, watery areas that may have a foul odor.',
+    'Stem Rot': 'Stem Rot causes soft, discolored lesions that can spread through the stem and cause the affected plant section to collapse.',
+    'Stem_Canker': 'Stem Canker causes deep, dark, and sometimes cracked lesions on dragon-fruit stems that can restrict the flow of water and nutrients.',
+    'Twig Blight': 'Twig Blight causes the tips of stems and young growth to dry, darken, and die back, reducing plant vigor.',
+    'White Spot': 'White Spot produces pale circular spots on dragon-fruit stems and fruit. Severe infections can reduce the plant’s photosynthetic capacity.',
+}
+
+for _disease_name, _description in DISEASE_DESCRIPTIONS.items():
+    DISEASE_DATABASE[_disease_name]['description'] = _description
+
 def get_disease_info(disease_name):
     """Get comprehensive information about a specific disease"""
     return DISEASE_DATABASE.get(disease_name, None)

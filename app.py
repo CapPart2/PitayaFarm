@@ -795,7 +795,21 @@ def get_library_api():
         for disease_name in get_all_diseases():
             disease_info = get_disease_info(disease_name)
             if disease_info:
-                diseases.append({"name": disease_name, **disease_info})
+                # The original disease reference uses concise field names
+                # (prevention, treatment, severity), while the Library UI uses
+                # the database-style names below.  Send one consistent shape so
+                # cards and full details never fall back to empty placeholders.
+                diseases.append(
+                    {
+                        "name": disease_name.replace("_", " "),
+                        "description": disease_info.get("description", ""),
+                        "symptoms": disease_info.get("symptoms", []),
+                        "causes": disease_info.get("causes", []),
+                        "prevention_methods": disease_info.get("prevention", []),
+                        "recommended_treatments": disease_info.get("treatment", []),
+                        "severity_level": disease_info.get("severity", "medium"),
+                    }
+                )
         return jsonify({"success": True, "data": diseases}), 200
     except Exception as e:
         logger.error(f"Library API error: {str(e)}")

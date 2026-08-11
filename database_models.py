@@ -8,10 +8,17 @@ import os
 import smtplib
 import sqlite3
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from email.message import EmailMessage
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
+MANILA_TIMEZONE = ZoneInfo("Asia/Manila")
+
+
+def manila_now() -> datetime:
+    """Return a timezone-aware timestamp for all newly saved farm records."""
+    return datetime.now(MANILA_TIMEZONE)
 
 
 class DatabaseManager:
@@ -1194,9 +1201,9 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
         """Insert a new yield prediction record and return its id"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        now = datetime.now().isoformat()
+        now = manila_now().isoformat()
         if season is None:
-            d = datetime.now()
+            d = manila_now()
             q = (d.month - 1) // 3 + 1
             season = f"{d.year} Q{q}"
         cursor.execute(

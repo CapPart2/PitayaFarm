@@ -67,5 +67,6 @@ test_report.pdf
 test_direct_report.pdf
 Activity-AppDev.code-workspace
 flask_session/
-frontend/public/All Disease/
+# Keep the nine curated Library images in source control.  The much larger
+# oversample training dataset remains excluded below.
 frontend/public/oversample/
