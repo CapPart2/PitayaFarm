@@ -257,13 +257,14 @@ const predictionApi = {
         };
       } else {
         return {
-          diseaseName: 'No Disease Detected',
+          diseaseName: 'No disease detection found',
           confidence: parseFloat(data.detection.confidence_level) || 0,
-          severity: 'low',
+          severity: 'none',
           affectedPart: 'None',
           symptoms: '',
-          recommendation: data.detection.message || 'No visible disease detected.',
+          recommendation: data.detection.message || 'No disease detection found. Please upload a clear dragon fruit stem image.',
           treatment: '',
+          noDisease: true,
           confidenceMessage: `${data.detection.confidence_level}% confidence`,
           topPredictions: [],
           alert: null,

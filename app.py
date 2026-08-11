@@ -296,17 +296,26 @@ def predict():
         # Hard reject obvious non-stem uploads before running the model.
         subject_check = validate_dragonfruit_stem_image(saved_file_path)
         if not subject_check.get("valid", False):
-            return (
-                jsonify(
-                    {
-                        "success": False,
-                        "error": "Invalid image subject. Please capture dragon fruit stem only.",
+            # The classifier has no "other subject" class, so a non-stem image
+            # must never be forced into one of the disease labels or saved as a
+            # detection. Return a successful, explicit no-detection result for
+            # the UI instead of an HTTP error.
+            return jsonify(
+                {
+                    "success": True,
+                    "detection": {
+                        "disease_name": None,
+                        "confidence_level": 0,
+                        "severity": "none",
+                        "message": "No disease detection found. Please capture a clear dragon fruit stem image.",
                         "reason": "invalid_subject",
+                    },
+                    "prediction_details": {
+                        "detected_diseases": [],
                         "subject_validation": subject_check,
-                    }
-                ),
-                400,
-            )
+                    },
+                }
+            ), 200
 
         # Use simple accurate detection
         with open(saved_file_path, "rb") as image_file:
@@ -319,20 +328,19 @@ def predict():
             prediction_details = result.get("prediction_details", {})
 
             if detection and detection.get("reason") == "invalid_subject":
-                return (
-                    jsonify(
-                        {
-                            "success": False,
-                            "error": detection.get(
-                                "message",
-                                "Invalid image subject. Please capture dragon fruit stem only.",
-                            ),
-                            "detection": detection,
-                            "prediction_details": prediction_details,
-                        }
-                    ),
-                    400,
+                detection["disease_name"] = None
+                detection["confidence_level"] = 0
+                detection["severity"] = "none"
+                detection["message"] = (
+                    "No disease detection found. Please capture a clear dragon fruit stem image."
                 )
+                return jsonify(
+                    {
+                        "success": True,
+                        "detection": detection,
+                        "prediction_details": prediction_details,
+                    }
+                ), 200
 
             # Check if multiple diseases were detected
             detected_diseases = prediction_details.get("detected_diseases", [])

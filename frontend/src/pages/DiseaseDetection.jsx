@@ -109,14 +109,15 @@ export default function DiseaseDetection() {
         } else {
           // No disease detected
           setResult({
-            diseaseName: 'No Disease Detected',
+            diseaseName: 'No disease detection found',
             confidence: response.detection.confidence_level,
-            severity: 'low',
+            severity: 'none',
             symptoms: [],
             causes: [],
             treatment: [],
             affectedPart: 'None',
-            recommendation: response.detection.message || 'No visible disease detected. Please upload a clearer image.',
+            recommendation: response.detection.message || 'No disease detection found. Please upload a clear dragon fruit stem image.',
+            noDisease: true,
             alert: null,
             reportId: null
           })
@@ -142,7 +143,7 @@ export default function DiseaseDetection() {
   }
 
   const handleAddDetection = async () => {
-    if (!result || isDetectionConfirmed) return
+    if (!result || result.noDisease || isDetectionConfirmed) return
     
     try {
       setLoading(true)
@@ -496,7 +497,7 @@ export default function DiseaseDetection() {
                     )}
 
                     {/* Disease Information */}
-                    {result.diseaseName !== 'No Disease Detected' ? (
+                    {!result.noDisease ? (
                       <>
                         {/* Multiple Diseases Display */}
                         {result.multipleDiseases && result.multipleDiseases.length > 1 ? (
@@ -682,7 +683,7 @@ export default function DiseaseDetection() {
                     )}
                     
                     {/* Add Detection Button and Confirmation */}
-                    {result && !isDetectionConfirmed && (
+                    {result && !result.noDisease && !isDetectionConfirmed && (
                       <div className="mt-6 space-y-3">
                         <div className="p-4 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
                           <p className="text-sm text-yellow-800 dark:text-yellow-200">
