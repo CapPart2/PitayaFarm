@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { TAGALOG_DISEASE_CONTENT } from '../data/tagalogDiseaseContent';
 import LoadingSpinner from './LoadingSpinner';
 
 // Disease image mapping for comprehensive dragon fruit diseases
@@ -30,6 +31,14 @@ const diseaseImages = {
   'Twig Blight': '/All Disease/Twig Blight.jpg',
   'Black Spot': '/All Disease/blackspot.jpeg',
 };
+
+const galleryImagesFor = (diseaseName) => {
+  const slug = String(diseaseName || '').toLowerCase().replace(/\s+/g, '-');
+  return Array.from({ length: 5 }, (_, index) => `/disease-gallery/${slug}/${index + 1}.jpg`);
+};
+
+const getLibrarySeverity = (diseaseName, severity) =>
+  diseaseName === 'White Spot' ? 'medium' : String(severity || 'medium').toLowerCase();
 
 const OVERRIDES_STORAGE_KEY = 'pitaya.diseaseLibrary.overrides.v1';
 const EMPTY_OVERRIDES = Object.freeze({});
@@ -210,7 +219,7 @@ const Library = () => {
     const base = diseases?.[selectedDiseaseName];
     if (!base) return null;
     const o = activeOverrides?.[selectedDiseaseName] || {};
-    const severity_level = (o.severity_level || base.severity_level || 'medium').toLowerCase();
+    const severity_level = getLibrarySeverity(selectedDiseaseName, o.severity_level || base.severity_level);
     const requiresRootRemoval =
       typeof o.requiresRootRemoval === 'boolean'
         ? o.requiresRootRemoval
@@ -240,25 +249,10 @@ const Library = () => {
   };
 
   const fetchAdditionalImages = async (diseaseName) => {
-    try {
-      console.log(`Fetching additional images for ${diseaseName}`);
-      setLoadingImages(true);
-      const response = await fetch(`/api/disease-images/${encodeURIComponent(diseaseName)}`);
-      const data = await response.json();
-      
-      if (data.success) {
-        console.log('Images fetched successfully:', data.data.images);
-        setAdditionalImages(data.data.images);
-        setShowImagesModal(true);
-        console.log('Modal should be showing now');
-      } else {
-        console.error(`Failed to load additional images for ${diseaseName}`);
-      }
-    } catch (err) {
-      console.error(`Error loading additional images: ${err.message}`);
-    } finally {
-      setLoadingImages(false);
-    }
+    setLoadingImages(true);
+    setAdditionalImages(galleryImagesFor(diseaseName));
+    setShowImagesModal(true);
+    setLoadingImages(false);
   };
 
   const openAdminEditor = (disease) => {
@@ -383,6 +377,9 @@ const Library = () => {
     if (language !== 'tagalog') {
       return originalText;
     }
+
+    const reviewedTranslation = TAGALOG_DISEASE_CONTENT[diseaseName]?.[field];
+    if (reviewedTranslation) return reviewedTranslation;
     
     // Get the disease data
     const disease = diseases[diseaseName];
@@ -481,7 +478,7 @@ const Library = () => {
     if (severityFilter !== 'all') {
       filtered = Object.fromEntries(
         Object.entries(filtered).filter(([_, info]) => 
-          (activeOverrides?.[_]?.severity_level || info.severity_level || '').toLowerCase() === severityFilter.toLowerCase()
+          getLibrarySeverity(_, activeOverrides?.[_]?.severity_level || info.severity_level) === severityFilter.toLowerCase()
         )
       );
     }
@@ -593,7 +590,9 @@ const Library = () => {
           </div>
         </div>
         <p className="text-gray-600 dark:text-gray-300">
-          Comprehensive information about dragon fruit diseases with automatic detection linking
+          {language === 'tagalog'
+            ? 'Komprehensibong impormasyon tungkol sa mga sakit ng dragon fruit at kaugnayan nito sa awtomatikong pagtukoy'
+            : 'Comprehensive information about dragon fruit diseases with automatic detection linking'}
         </p>
       </div>
 
@@ -676,7 +675,7 @@ const Library = () => {
             <span className="text-sm font-medium text-gray-600 dark:text-gray-300">High Severity</span>
           </div>
           <div className="mt-2 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            {Object.values(diseases || {}).filter(d => d.severity_level?.toLowerCase() === 'high').length}
+            {Object.entries(diseases || {}).filter(([name, d]) => getLibrarySeverity(name, d.severity_level) === 'high').length}
           </div>
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
@@ -685,7 +684,7 @@ const Library = () => {
             <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Medium Severity</span>
           </div>
           <div className="mt-2 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            {Object.values(diseases || {}).filter(d => d.severity_level?.toLowerCase() === 'medium').length}
+            {Object.entries(diseases || {}).filter(([name, d]) => getLibrarySeverity(name, d.severity_level) === 'medium').length}
           </div>
         </div>
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700 p-4">
@@ -694,7 +693,7 @@ const Library = () => {
             <span className="text-sm font-medium text-gray-600 dark:text-gray-300">Low Severity</span>
           </div>
           <div className="mt-2 text-2xl font-bold text-gray-900 dark:text-gray-100">
-            {Object.values(diseases || {}).filter(d => d.severity_level?.toLowerCase() === 'low').length}
+            {Object.entries(diseases || {}).filter(([name, d]) => getLibrarySeverity(name, d.severity_level) === 'low').length}
           </div>
         </div>
       </div>
@@ -704,7 +703,7 @@ const Library = () => {
         {Object.entries(filteredDiseases || {}).map(([name, info]) => {
           if (!info || !name) return null;
           const o = activeOverrides?.[name] || {};
-          const effectiveSeverity = (o.severity_level || info.severity_level || 'medium').toLowerCase();
+          const effectiveSeverity = getLibrarySeverity(name, o.severity_level || info.severity_level);
           const requiresRootRemoval =
             typeof o.requiresRootRemoval === 'boolean'
               ? o.requiresRootRemoval
@@ -766,7 +765,7 @@ const Library = () => {
               {info.detection_count > 0 && (
                 <div className="bg-pitaya-pale/60 dark:bg-pitaya-dark-pale/40 rounded-xl p-3 mb-4 border border-pitaya-leaf/15">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-pitaya-deep dark:text-gray-100 font-medium">Detection History</span>
+                    <span className="text-pitaya-deep dark:text-gray-100 font-medium">{language === 'tagalog' ? 'Kasaysayan ng Pagtukoy' : 'Detection History'}</span>
                     <span className="text-pitaya-primary dark:text-pitaya-mint">{info.detection_count} times</span>
                   </div>
                   <div className="text-xs text-pitaya-primary/80 dark:text-pitaya-mint/90 mt-1">
@@ -854,7 +853,7 @@ const Library = () => {
 
               {/* View Details Button */}
               <button className="mt-4 w-full bg-pitaya-primary text-white py-2.5 px-4 rounded-xl hover:bg-pitaya-leaf transition-colors text-sm font-semibold min-h-[44px]">
-                View Full Details
+                {language === 'tagalog' ? 'Tingnan ang Buong Detalye' : 'View Full Details'}
               </button>
             </div>
           </motion.div>
@@ -866,8 +865,8 @@ const Library = () => {
       {Object.keys(filteredDiseases).length === 0 && (
         <div className="text-center py-12">
           <BookOpen className="w-16 h-16 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No diseases found</h3>
-          <p className="text-gray-600 dark:text-gray-300">Try adjusting your search or filters</p>
+          <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">{language === 'tagalog' ? 'Walang nahanap na sakit' : 'No diseases found'}</h3>
+          <p className="text-gray-600 dark:text-gray-300">{language === 'tagalog' ? 'Subukang baguhin ang paghahanap o mga filter' : 'Try adjusting your search or filters'}</p>
         </div>
       )}
 
@@ -903,7 +902,7 @@ const Library = () => {
                 ) : (
                   <Images className="h-4 w-4" />
                 )}
-                <span>More Pictures</span>
+                <span>{language === 'tagalog' ? 'Higit pang Larawan' : 'More Pictures'}</span>
               </button>
               {/* Close button overlay */}
               <button
@@ -926,7 +925,7 @@ const Library = () => {
                 <div className="flex flex-wrap items-center gap-2">
                   <div className={`inline-flex items-center gap-1 px-3 py-1 rounded-full border text-sm font-medium ${getSeverityColor(effectiveDisease.severity_level)}`}>
                     {getSeverityIcon(effectiveDisease.severity_level)}
-                    <span>{effectiveDisease.severity_level?.toUpperCase()} SEVERITY</span>
+                    <span>{language === 'tagalog' ? `${effectiveDisease.severity_level?.toUpperCase()} NA KALUBHAAN` : `${effectiveDisease.severity_level?.toUpperCase()} SEVERITY`}</span>
                   </div>
                   {canEditLibrary && (
                     <button
@@ -971,7 +970,7 @@ const Library = () => {
               {/* Detection History */}
               {effectiveDisease.detection_count > 0 && (
                 <div className="bg-pitaya-pale/60 dark:bg-pitaya-dark-pale/40 rounded-2xl p-4 mb-6 border border-pitaya-leaf/15">
-                  <h3 className="text-lg font-semibold text-pitaya-deep dark:text-gray-100 mb-2">Detection History</h3>
+                  <h3 className="text-lg font-semibold text-pitaya-deep dark:text-gray-100 mb-2">{language === 'tagalog' ? 'Kasaysayan ng Pagtukoy' : 'Detection History'}</h3>
                   <div className="grid grid-cols-2 gap-4 text-sm">
                     <div>
                       <span className="text-pitaya-primary dark:text-pitaya-mint">Total Detections:</span>
@@ -1213,7 +1212,7 @@ const Library = () => {
 
                 {/* Treatment */}
                 <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">Treatment</h3>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-3">{language === 'tagalog' ? 'Paggamot' : 'Treatment'}</h3>
                   <div className="space-y-4">
                     {(() => {
                       const treatmentsData = language === 'tagalog'
@@ -1576,7 +1575,7 @@ const Library = () => {
             
             <div className="flex items-center justify-between p-6 pr-16 border-b border-gray-200 dark:border-gray-700">
               <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100">
-                Additional Images - {effectiveDisease?.name || selectedDiseaseName}
+                {language === 'tagalog' ? 'Karagdagang Larawan' : 'Additional Images'} - {effectiveDisease?.name || selectedDiseaseName}
               </h2>
             </div>
             
@@ -1584,7 +1583,7 @@ const Library = () => {
               {loadingImages ? (
                 <div className="flex items-center justify-center py-12">
                   <Loader2 className="h-8 w-8 animate-spin text-pitaya-primary mr-3" />
-                  <p className="text-gray-600 dark:text-gray-300">Loading additional images...</p>
+                  <p className="text-gray-600 dark:text-gray-300">{language === 'tagalog' ? 'Naglo-load ng karagdagang larawan...' : 'Loading additional images...'}</p>
                 </div>
               ) : additionalImages.length > 0 ? (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1607,8 +1606,8 @@ const Library = () => {
               ) : (
                 <div className="text-center py-12">
                   <Images className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No Additional Images</h3>
-                  <p className="text-gray-600 dark:text-gray-300">No additional images found for this disease in the oversample folders.</p>
+                  <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">{language === 'tagalog' ? 'Walang Karagdagang Larawan' : 'No Additional Images'}</h3>
+                  <p className="text-gray-600 dark:text-gray-300">{language === 'tagalog' ? 'Walang nahanap na karagdagang larawan para sa sakit na ito.' : 'No additional images found for this disease.'}</p>
                 </div>
               )}
             </div>

@@ -272,7 +272,7 @@ DISEASE_DATABASE = {
             'Adjust watering practices',
             'Remove severely affected plant parts'
         ],
-        'severity': 'low',
+        'severity': 'medium',
         'prevention': [
             'Maintain proper plant spacing',
             'Provide balanced fertilization',
