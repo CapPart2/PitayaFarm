@@ -212,18 +212,29 @@ class ImprovedDiseaseDetection:
             texture_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
             # Hard rejections for paper/document-like shots.
+            # A close stem shot can have a large concrete/sky background that
+            # is bright and neutral. Treat it as a document only when that
+            # background is present *and* meaningful plant-colour tissue is
+            # absent; otherwise a damaged yellow/brown stem is wrongly lost.
             document_like = (
-                paper_like_ratio >= 0.72 and organic_ratio <= 0.20
-            ) or (mean_saturation < 30 and paper_like_ratio >= 0.58)
+                paper_like_ratio >= 0.72
+                and organic_ratio <= 0.20
+                and plant_ratio < 0.10
+            ) or (
+                mean_saturation < 30
+                and paper_like_ratio >= 0.58
+                and plant_ratio < 0.10
+            )
 
-            # A warm/brown textured area is not sufficient evidence of a
-            # dragon-fruit stem. Require meaningful green cactus tissue so
-            # people, soil, fabric, and other objects are rejected.
+            # A healthy cactus is green, but a diseased dragon-fruit stem can
+            # be predominantly yellow/brown.  Require substantial plant-colour
+            # tissue and allow damaged tissue to satisfy the colour evidence;
+            # otherwise severe disease photos are rejected before inference.
             is_target = (
                 not document_like
                 and organic_ratio >= 0.18
                 and plant_ratio >= 0.12
-                and green_ratio >= 0.08
+                and (green_ratio >= 0.03 or brown_ratio >= 0.08)
                 and paper_like_ratio <= 0.68
                 and (texture_score >= 18.0 or mean_saturation >= 45.0)
             )

@@ -5,6 +5,7 @@ import { getPitayaUserScopeHeaders } from '../api/userScope'
 import { predictionApi } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
 import SeverityBadge from '../components/SeverityBadge'
+import { attachCameraStream, captureCameraPhoto, openCaptureCamera } from '../utils/cameraCapture'
 
 const container = {
   hidden: { opacity: 0 },
@@ -254,41 +255,30 @@ export default function DiseaseDetection() {
     }
   }
 
-  const handleCapture = () => {
-    if (!videoRef.current) return
-    const canvas = document.createElement('canvas')
-    canvas.width = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(videoRef.current, 0, 0)
-    canvas.toBlob((blob) => {
-      if (!blob) return
-      const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' })
+  const handleCapture = async () => {
+    try {
+      const file = await captureCameraPhoto(videoRef.current, 'disease-capture.jpg')
       setSelectedFile(file)
-      setPreviewUrl(URL.createObjectURL(blob))
+      setPreviewUrl(URL.createObjectURL(file))
       setResult(null)
       setSessionId(Date.now().toString()) // Generate session ID for grouping
       runDetection(file)
-    }, 'image/jpeg', 0.9)
+    } catch (captureError) {
+      setError(captureError.message)
+    }
   }
 
   const startCamera = async () => {
-    let stream
     try {
-      // Try with environment facing mode first (for mobile rear cameras)
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-    } catch (envError) {
-      try {
-        // Fallback to any available camera (includes Phone Link virtual cameras)
-        stream = await navigator.mediaDevices.getUserMedia({ video: true })
-      } catch (anyError) {
-        console.error('Camera access failed:', anyError)
-        alert('Camera access failed. Please check permissions and ensure a camera is available.')
-        return
-      }
+      stopCamera()
+      const stream = await openCaptureCamera()
+      streamRef.current = stream
+      await attachCameraStream(videoRef.current, stream)
+      setError(null)
+    } catch (cameraError) {
+      console.error('Camera access failed:', cameraError)
+      setError(cameraError.message)
     }
-    streamRef.current = stream
-    if (videoRef.current) videoRef.current.srcObject = stream
   }
 
   const stopCamera = () => {

@@ -111,7 +111,13 @@ def get_request_user_id(default=None):
 
 
 def validate_dragonfruit_stem_image(image_path):
-    """Hard gate to reject non-stem uploads (e.g., paper/documents)."""
+    """Reject obvious non-stem uploads without rejecting damaged yellow stems.
+
+    Disease images often contain little green tissue: a severely infected
+    dragon-fruit stem may be yellow, tan, or brown, with only a small green
+    section left.  The old RGB-only rule required 8% bright green pixels and
+    consequently rejected exactly those images before the disease model ran.
+    """
     try:
         image = Image.open(image_path).convert("RGB")
         arr = np.array(image, dtype=np.uint8)
@@ -134,9 +140,19 @@ def validate_dragonfruit_stem_image(image_path):
         # Stem-like colors: green and brown regions.
         green_mask = (g >= r + 14) & (g >= b + 14) & (g >= 50)
         brown_mask = (r >= 72) & (g >= 40) & (b <= 125) & ((r - g) >= 8)
-        plant_mask = green_mask | brown_mask
+        # Yellow/tan is an important stem colour in photos of rot/canker. It
+        # must be included in the subject check even though it is not "green".
+        yellow_mask = (
+            (r >= 90)
+            & (g >= 70)
+            & (b <= 160)
+            & ((r - b) >= 35)
+            & ((g - b) >= 20)
+        )
+        plant_mask = green_mask | brown_mask | yellow_mask
         green_ratio = float(np.mean(green_mask))
         brown_ratio = float(np.mean(brown_mask))
+        yellow_ratio = float(np.mean(yellow_mask))
         plant_ratio = float(np.mean(plant_mask))
 
         gray = (0.299 * r + 0.587 * g + 0.114 * b).astype(np.float32)
@@ -158,7 +174,13 @@ def validate_dragonfruit_stem_image(image_path):
         # before a disease-only classifier is allowed to choose a label.
         valid = (
             (plant_ratio >= 0.12)
-            and (green_ratio >= 0.08)
+            # Accept a close, visibly damaged stem when its yellow/brown
+            # tissue is substantial. The model performs the final diagnosis.
+            and (
+                green_ratio >= 0.03
+                or brown_ratio >= 0.08
+                or yellow_ratio >= 0.07
+            )
             and (paper_ratio <= 0.78)
             and (gray_std >= 16 or edge_energy >= 12)
             and (not document_like)
@@ -171,6 +193,7 @@ def validate_dragonfruit_stem_image(image_path):
             "paper_ratio": paper_ratio,
             "green_ratio": green_ratio,
             "brown_ratio": brown_ratio,
+            "yellow_ratio": yellow_ratio,
             "mean_brightness": mean_brightness,
             "mean_chroma": mean_chroma,
             "gray_std": gray_std,

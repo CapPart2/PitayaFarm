@@ -13,6 +13,7 @@ import {
 import { saveYieldToChart, uploadYieldImage, uploadYieldVideo } from '../api/dashboard'
 import { fetchYield } from '../api/yieldApi'
 import LoadingSpinner from '../components/LoadingSpinner'
+import { attachCameraStream, captureCameraPhoto, openCaptureCamera } from '../utils/cameraCapture'
 
 const container = {
   hidden: { opacity: 0 },
@@ -190,11 +191,13 @@ export default function YieldPrediction() {
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+      stopCamera()
+      const stream = await openCaptureCamera()
       streamRef.current = stream
-      if (videoRef.current) videoRef.current.srcObject = stream
+      await attachCameraStream(videoRef.current, stream)
     } catch (err) {
       console.warn('Camera start failed', err)
+      setDetectionResult({ detections: [], message: err.message })
     }
   }
 
@@ -204,19 +207,14 @@ export default function YieldPrediction() {
     if (videoRef.current) videoRef.current.srcObject = null
   }
 
-  const capturePhoto = () => {
-    if (!videoRef.current) return
-    const canvas = document.createElement('canvas')
-    canvas.width = videoRef.current.videoWidth
-    canvas.height = videoRef.current.videoHeight
-    const ctx = canvas.getContext('2d')
-    ctx.drawImage(videoRef.current, 0, 0)
-    canvas.toBlob((blob) => {
-      if (!blob) return
-      const file = new File([blob], 'capture.jpg', { type: 'image/jpeg' })
-      setPreviewUrl(URL.createObjectURL(blob))
+  const capturePhoto = async () => {
+    try {
+      const file = await captureCameraPhoto(videoRef.current, 'maturity-capture.jpg')
+      setPreviewUrl(URL.createObjectURL(file))
       runDetection(file)
-    }, 'image/jpeg', 0.9)
+    } catch (err) {
+      setDetectionResult({ detections: [], message: err.message })
+    }
   }
 
   const stopLiveCapture = () => {
@@ -248,12 +246,9 @@ export default function YieldPrediction() {
     liveTracksRef.current = []
     liveNextTrackIdRef.current = 1
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-        audio: false,
-      })
+      const stream = await openCaptureCamera()
       liveStreamRef.current = stream
-      if (liveVideoRef.current) liveVideoRef.current.srcObject = stream
+      await attachCameraStream(liveVideoRef.current, stream)
 
       setLiveActive(true)
       // Run detection periodically. This is a tradeoff between responsiveness and server load.
