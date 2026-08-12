@@ -1,6 +1,7 @@
 import { AlertTriangle, Calendar, Download, Eye, FileText, Filter, Search, Trash2, TrendingUp, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { getPitayaUserScopeHeaders } from '../api/userScope';
+import { apiUrl, fetchWithTimeout } from '../api/client';
 
 const ReportsModule = () => {
   const API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE_URL || '').replace(/\/$/, '');
@@ -34,16 +35,17 @@ const ReportsModule = () => {
 
   const fetchReports = async () => {
     try {
-      const response = await fetch(`${API_BASE}/api/dashboard/reports`, {
+      const response = await fetchWithTimeout(apiUrl('/api/dashboard/reports'), {
         headers: getPitayaUserScopeHeaders(),
       });
+      if (!response.ok) throw new Error(`Reports request failed (${response.status})`);
       const root = await response.json();
       const data = root.data || [];
       
       // Fetch disease information to populate symptoms, causes, and treatment
       let diseases = {};
       try {
-        const diseaseResponse = await fetch(`${API_BASE}/api/library/`, {
+        const diseaseResponse = await fetchWithTimeout(apiUrl('/api/library/'), {
           headers: getPitayaUserScopeHeaders(),
         });
         if (diseaseResponse.ok) {

@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { libraryApi } from '../api/client';
+import { dashboardApiUrl, fetchWithTimeout, libraryApi } from '../api/client';
 import { getPitayaUserScopeHeaders } from '../api/userScope';
 import LoadingSpinner from './LoadingSpinner';
 
@@ -249,7 +249,7 @@ export default function AlertsModule() {
 
   const fetchUnreadCount = async () => {
     try {
-      const response = await fetch('/api/dashboard/alerts/unread-count', { headers: getPitayaUserScopeHeaders() });
+      const response = await fetchWithTimeout(dashboardApiUrl('/alerts/unread-count'), { headers: getPitayaUserScopeHeaders() });
       const data = await response.json();
       if (data?.success) setUnreadCount(data.data.count || 0);
     } catch {
@@ -261,9 +261,11 @@ export default function AlertsModule() {
     try {
       const scopeHeaders = { headers: getPitayaUserScopeHeaders() };
       const [allResponse, unreadResponse] = await Promise.all([
-        fetch('/api/dashboard/alerts', scopeHeaders),
-        fetch('/api/dashboard/alerts?unread_only=true', scopeHeaders),
+        fetchWithTimeout(dashboardApiUrl('/alerts'), scopeHeaders),
+        fetchWithTimeout(dashboardApiUrl('/alerts?unread_only=true'), scopeHeaders),
       ]);
+
+      if (!allResponse.ok || !unreadResponse.ok) throw new Error('Alerts request failed');
 
       const allRoot = await allResponse.json();
       const unreadRoot = await unreadResponse.json();

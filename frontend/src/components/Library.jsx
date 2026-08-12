@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { apiUrl, fetchWithTimeout } from '../api/client';
 import { TAGALOG_DISEASE_CONTENT } from '../data/tagalogDiseaseContent';
 import LoadingSpinner from './LoadingSpinner';
 
@@ -346,7 +347,7 @@ const Library = () => {
 
   const fetchUserPreferences = async () => {
     try {
-      const response = await fetch('/api/user/preferences');
+      const response = await fetchWithTimeout(apiUrl('/api/user/preferences'));
       const data = await response.json();
       if (data.success) {
         const preferredLanguage = data.data.preferred_language;
@@ -360,7 +361,7 @@ const Library = () => {
   const toggleLanguage = async (targetLanguage) => {
     try {
       // Update user preference
-      await fetch('/api/user/preferences', {
+      await fetchWithTimeout(apiUrl('/api/user/preferences'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ preferred_language: targetLanguage })
@@ -431,7 +432,8 @@ const Library = () => {
 
   const fetchDiseases = async () => {
     try {
-      const response = await fetch('/api/library/');
+      const response = await fetchWithTimeout(apiUrl('/api/library/'));
+      if (!response.ok) throw new Error(`Library request failed (${response.status})`);
       const data = await response.json();
       
       // Handle the comprehensive disease library API response

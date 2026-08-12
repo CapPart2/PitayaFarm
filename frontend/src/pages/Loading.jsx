@@ -2,9 +2,16 @@ import { motion } from 'framer-motion'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
-const HEALTH_URL = `${import.meta.env.VITE_API_BASE_URL || window.location.origin}/health`
+const API_ORIGIN = (
+  import.meta.env.VITE_API_BASE ||
+  import.meta.env.VITE_API_BASE_URL ||
+  window.location.origin
+).replace(/\/$/, '')
+const HEALTH_URL = `${API_ORIGIN}/health`
 const MIN_PROGRESS_WHEN_ONLINE = 15
 const BASE_DURATION_MS = 5200
+const BACKEND_TIMEOUT_MS = 8_000
+const SHOW_CONTINUE_AFTER_MS = 12_000
 const OFFLINE_MESSAGE = 'Offline. Waiting for connection...'
 
 export default function Loading() {
@@ -14,6 +21,7 @@ export default function Loading() {
   const [connectionLabel, setConnectionLabel] = useState('Checking connection...')
   const [isOnline, setIsOnline] = useState(navigator.onLine)
   const [isBackendReachable, setIsBackendReachable] = useState(false)
+  const [showContinue, setShowContinue] = useState(false)
   const onlineRef = useRef(navigator.onLine)
   const backendReachableRef = useRef(false)
 
@@ -35,6 +43,7 @@ export default function Loading() {
     let pollTimer = 0
     let lastFrameTime = 0
     let accumulatedOnlineMs = 0
+    const startupTime = Date.now()
     let mounted = true
 
     const updateConnectionLabel = (online, backendReachable) => {
@@ -75,12 +84,21 @@ export default function Loading() {
       }
 
       try {
-        const response = await fetch(HEALTH_URL, { cache: 'no-store' })
+        // DNS and unreachable-host requests can otherwise wait indefinitely
+        // inside a mobile WebView and keep the splash screen on-screen forever.
+        const controller = new AbortController()
+        const timeoutId = window.setTimeout(() => controller.abort(), BACKEND_TIMEOUT_MS)
+        const response = await fetch(HEALTH_URL, {
+          cache: 'no-store',
+          signal: controller.signal,
+        })
+        window.clearTimeout(timeoutId)
         const reachable = response.ok
 
         if (mounted) {
           setIsBackendReachable(reachable)
           backendReachableRef.current = reachable
+          if (reachable) setShowContinue(false)
           updateConnectionLabel(true, reachable)
         }
 
@@ -121,6 +139,11 @@ export default function Loading() {
       if (online && backendReachable && accumulatedOnlineMs >= BASE_DURATION_MS) {
         navigate('/landing', { replace: true })
         return
+      }
+
+      if (online && !backendReachable && Date.now() - startupTime >= SHOW_CONTINUE_AFTER_MS) {
+        setConnectionLabel('Backend is unavailable. Check the Railway URL or try again later.')
+        setShowContinue(true)
       }
 
       animationFrameId = window.requestAnimationFrame(tick)
@@ -195,6 +218,24 @@ export default function Loading() {
                 <span className="inline-flex h-4 w-4 rounded-full border-2 border-pitaya-leaf border-t-transparent animate-spin" aria-hidden />
                 <span className="font-medium">{connectionLabel}</span>
               </div>
+              {showContinue && (
+                <div className="mt-4 flex justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="min-h-[40px] rounded-lg border border-pitaya-primary px-4 text-sm font-medium text-pitaya-primary"
+                  >
+                    Retry
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('/landing', { replace: true })}
+                    className="min-h-[40px] rounded-lg bg-pitaya-primary px-4 text-sm font-medium text-white"
+                  >
+                    Continue
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

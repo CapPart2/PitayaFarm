@@ -5,6 +5,33 @@ import { getPitayaUserScopeHeaders } from './userScope';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 const DASHBOARD_API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE || '/api/dashboard').replace(/\/$/, '');
+const REQUEST_TIMEOUT_MS = 15_000;
+
+// Capacitor serves the bundled UI from capacitor://localhost. Relative URLs
+// therefore never reach Railway in the APK. Keep all backend URLs absolute
+// when VITE_API_BASE is set, while retaining relative URLs for browser dev.
+const apiUrl = (path) => {
+  if (/^https?:\/\//i.test(path)) return path;
+  return API_BASE ? `${API_BASE}${path.startsWith('/') ? '' : '/'}${path}` : path;
+};
+
+const dashboardApiUrl = (path) => {
+  if (/^https?:\/\//i.test(path)) return path;
+  const root = /^https?:\/\//i.test(DASHBOARD_API_BASE)
+    ? DASHBOARD_API_BASE
+    : apiUrl(DASHBOARD_API_BASE);
+  return `${root}${path.startsWith('/') ? '' : '/'}${path}`;
+};
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
 
 // Cache for CSRF token
 let csrfToken = null;
@@ -51,7 +78,7 @@ async function getCsrfToken() {
   try {
     csrfTokenPromise = (async () => {
       // Use the proxy for CSRF token
-      const response = await fetch('/api/csrf/', {
+      const response = await fetchWithTimeout(apiUrl('/api/csrf/'), {
         method: 'GET',
         credentials: 'include',
         headers: {
@@ -100,8 +127,8 @@ async function fetchWithAuth(url, options = {}) {
   }
 
   // Make the request
-  const finalUrl = url.startsWith('http') ? url : (url.startsWith(API_BASE) ? url : `${API_BASE}${url}`);
-  const response = await fetch(finalUrl, {
+  const finalUrl = apiUrl(url);
+  const response = await fetchWithTimeout(finalUrl, {
     ...options,
     headers,
     credentials: 'same-origin',
@@ -119,12 +146,12 @@ const libraryApi = {
     if (plantPart) params.append('plant_part', plantPart);
     
     const queryString = params.toString() ? `?${params.toString()}` : '';
-    return fetchWithAuth(`${API_BASE}/library/${queryString}`);
+    return fetchWithAuth(`/api/library/${queryString}`);
   },
 
   // Get disease details by name
   getDiseaseByName: async (diseaseName) => {
-    return fetchWithAuth(`${API_BASE}/library/${encodeURIComponent(diseaseName)}`);
+    return fetchWithAuth(`/library/${encodeURIComponent(diseaseName)}`);
   },
 };
 
@@ -133,7 +160,7 @@ const alertsApi = {
   // Get recent alerts
   getRecentAlerts: async (limit = 10) => {
     // Calls Dashboard API (port 5001) via Vite proxy /api/dashboard
-    const response = await fetchWithAuth(`${API_BASE}/dashboard/alerts`); 
+    const response = await fetchWithAuth(dashboardApiUrl('/alerts'));
     // Dashboard API returns { success: true, data: [...] }
     const alerts = response.data || [];
     return alerts.slice(0, limit);
@@ -222,7 +249,7 @@ const predictionApi = {
     formData.append('file', file, file?.name || 'upload.jpg');
 
     // Direct fetch without credentials for Flask API
-    const response = await fetch(`${API_BASE}/predict`, {
+    const response = await fetchWithTimeout(apiUrl('/predict'), {
       method: 'POST',
       body: formData,
       headers: getPitayaUserScopeHeaders(),
@@ -290,5 +317,5 @@ const predictionApi = {
 };
 
 // Export all API functions
-export { alertsApi, fetchWithAuth, getCsrfToken, libraryApi, predictionApi, reportsApi };
+export { alertsApi, apiUrl, dashboardApiUrl, fetchWithAuth, fetchWithTimeout, getCsrfToken, libraryApi, predictionApi, reportsApi };
 

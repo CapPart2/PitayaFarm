@@ -2,6 +2,7 @@ import { motion } from 'framer-motion'
 import { AlertCircle, Bell, Camera, CheckCircle, Settings, User } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { getPitayaCurrentUser, getPitayaUserScopeHeaders, getScopedStorageKey } from '../api/userScope'
+import { apiUrl, fetchWithTimeout } from '../api/client'
 
 function getPitayaUser() {
   try {
@@ -55,7 +56,7 @@ export default function Profile() {
   useEffect(() => {
     const loadProfileSettings = async () => {
       try {
-        const response = await fetch('/api/user/preferences', {
+        const response = await fetchWithTimeout(apiUrl('/api/user/preferences'), {
           headers: {
             ...getPitayaUserScopeHeaders(),
           },
@@ -227,7 +228,7 @@ export default function Profile() {
     }
 
     try {
-      const response = await fetch('/api/user/preferences', {
+      const response = await fetchWithTimeout(apiUrl('/api/user/preferences'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

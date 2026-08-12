@@ -3,6 +3,7 @@ import autoTable from 'jspdf-autotable'
 import { AlertTriangle, BarChart2, Calendar, Download, Eye, FileText, Filter, Search, Trash2, TrendingUp, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { getPitayaUserScopeHeaders } from '../api/userScope'
+import { dashboardApiUrl, fetchWithTimeout } from '../api/client'
 
 /* ─── helpers ─────────────────────────────────────────────── */
 const MANILA_TIME_ZONE = 'Asia/Manila'
@@ -121,7 +122,7 @@ const YieldReport = () => {
 
   const fetchRecords = async () => {
     try {
-      const res = await fetch('/api/dashboard/yield-predictions', {
+      const res = await fetchWithTimeout(dashboardApiUrl('/yield-predictions'), {
         headers: getPitayaUserScopeHeaders(),
       })
       const root = await res.json()

@@ -3,6 +3,7 @@
 import { getPitayaUserScopeHeaders } from './userScope';
 
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+const REQUEST_TIMEOUT_MS = 15_000;
 
 // Store admin token in localStorage
 const ADMIN_TOKEN_KEY = 'pitaya_admin_token';
@@ -54,10 +55,18 @@ async function fetchWithAdminAuth(url, options = {}) {
 
   const finalUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
   
-  const response = await fetch(finalUrl, {
-    ...options,
-    headers,
-  });
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(finalUrl, {
+      ...options,
+      headers,
+      signal: controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));

@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { getPitayaUserScopeHeaders } from '../api/userScope'
-import { predictionApi } from '../api/client'
+import { dashboardApiUrl, fetchWithTimeout, predictionApi } from '../api/client'
 import LoadingSpinner from '../components/LoadingSpinner'
 import SeverityBadge from '../components/SeverityBadge'
 import { attachCameraStream, captureCameraPhoto, openCaptureCamera } from '../utils/cameraCapture'
@@ -185,7 +185,7 @@ export default function DiseaseDetection() {
             formData.append('image', selectedFile)
           }
           
-          return fetch('/api/dashboard/disease-detection', {
+          return fetchWithTimeout(dashboardApiUrl('/disease-detection'), {
             method: 'POST',
             headers: getPitayaUserScopeHeaders(),
             body: formData
@@ -222,7 +222,7 @@ export default function DiseaseDetection() {
           formData.append('image', selectedFile)
         }
         
-        const response = await fetch('/api/dashboard/disease-detection', {
+        const response = await fetchWithTimeout(dashboardApiUrl('/disease-detection'), {
           method: 'POST',
           headers: getPitayaUserScopeHeaders(),
           body: formData

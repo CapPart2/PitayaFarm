@@ -4,10 +4,11 @@
  * Values are raw fruit counts — matching the Yield Report "Fruits Detected" column exactly.
  */
 import { getPitayaUserScopeHeaders } from './userScope'
+import { dashboardApiUrl, fetchWithTimeout } from './client'
 
 export async function fetchYield() {
   try {
-    const res = await fetch('/api/dashboard/yield-predictions', {
+    const res = await fetchWithTimeout(dashboardApiUrl('/yield-predictions'), {
       credentials: 'include',
       headers: getPitayaUserScopeHeaders(),
     })
