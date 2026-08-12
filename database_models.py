@@ -1717,6 +1717,48 @@ Immediate action is recommended. Please review the alert in the PITAYA dashboard
             }
         return None
 
+    def get_user_by_login_identifier(self, identifier: str) -> Optional[Dict]:
+        """Find a user by email address or username for the sign-in flow.
+
+        Email addresses are case-insensitive in practice.  Older versions of
+        the web login also submitted ``username`` instead of ``email``, so
+        accepting either identifier keeps existing accounts usable.
+        """
+        identifier = str(identifier or "").strip()
+        if not identifier:
+            return None
+
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT UserID, Username, Email, FirstName, LastName, Role, Status,
+                   PasswordHash, CreatedAt, LastLogin
+            FROM users
+            WHERE Email = ? COLLATE NOCASE OR Username = ? COLLATE NOCASE
+            ORDER BY CASE WHEN Email = ? COLLATE NOCASE THEN 0 ELSE 1 END
+            LIMIT 1
+            """,
+            (identifier, identifier, identifier),
+        )
+        row = cursor.fetchone()
+        conn.close()
+
+        if row:
+            return {
+                "UserID": row[0],
+                "Username": row[1],
+                "Email": row[2],
+                "FirstName": row[3],
+                "LastName": row[4],
+                "Role": row[5],
+                "Status": row[6],
+                "PasswordHash": row[7],
+                "CreatedAt": row[8],
+                "LastLogin": row[9],
+            }
+        return None
+
     def update_user(
         self,
         user_id: int,

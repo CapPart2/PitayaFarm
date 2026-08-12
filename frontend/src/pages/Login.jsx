@@ -15,24 +15,24 @@ export default function Login() {
   const navigate = useNavigate()
   const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
 
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [emailTouched, setEmailTouched] = useState(false)
+  const [identifierTouched, setIdentifierTouched] = useState(false)
   const [passwordTouched, setPasswordTouched] = useState(false)
   const [submitAttempted, setSubmitAttempted] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
-  const emailError = (submitAttempted || emailTouched) && !safeTrim(email) ? 'Email is required.' : ''
+  const identifierError = (submitAttempted || identifierTouched) && !safeTrim(identifier) ? 'Email or username is required.' : ''
   const passwordError = (submitAttempted || passwordTouched) && !safeTrim(password) ? 'Password is required.' : ''
 
-  const canSubmit = safeTrim(email).length > 0 && safeTrim(password).length > 0
+  const canSubmit = safeTrim(identifier).length > 0 && safeTrim(password).length > 0
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setSubmitAttempted(true)
-    setEmailTouched(true)
+    setIdentifierTouched(true)
     setPasswordTouched(true)
     setError('')
 
@@ -45,7 +45,7 @@ export default function Login() {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: safeTrim(email), password }),
+        body: JSON.stringify({ email: safeTrim(identifier), password }),
       })
       const data = await res.json()
       if (res.ok && data.success) {
@@ -147,27 +147,27 @@ export default function Login() {
 
             <div className="mt-6 space-y-4">
               <div>
-                <label htmlFor="email" className="block text-sm font-semibold text-gray-700">
-                  Email
+                <label htmlFor="identifier" className="block text-sm font-semibold text-gray-700">
+                  Email or username
                 </label>
                 <input
-                  id="email"
-                  name="email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onBlur={() => setEmailTouched(true)}
-                  autoComplete="email"
+                  id="identifier"
+                  name="username"
+                  type="text"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
+                  onBlur={() => setIdentifierTouched(true)}
+                  autoComplete="username"
                   className={`mt-2 w-full min-h-[44px] rounded-xl border bg-white px-4 py-3 text-gray-900 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-pitaya-mint placeholder:text-gray-400 ${
-                    emailError ? 'border-red-300 focus:ring-red-300' : 'border-gray-200 focus:border-pitaya-mint'
+                    identifierError ? 'border-red-300 focus:ring-red-300' : 'border-gray-200 focus:border-pitaya-mint'
                   }`}
-                  placeholder="Enter your email"
-                  aria-invalid={Boolean(emailError)}
-                  aria-describedby={emailError ? 'email-error' : undefined}
+                  placeholder="Enter your email or username"
+                  aria-invalid={Boolean(identifierError)}
+                  aria-describedby={identifierError ? 'identifier-error' : undefined}
                 />
-                {emailError && (
-                  <p id="email-error" className="mt-2 text-sm text-red-600">
-                    {emailError}
+                {identifierError && (
+                  <p id="identifier-error" className="mt-2 text-sm text-red-600">
+                    {identifierError}
                   </p>
                 )}
               </div>

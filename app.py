@@ -1351,21 +1351,23 @@ def api_login():
     try:
         data = request.get_json() or {}
         logger.info(f"Client IP: {get_client_ip()}")
-        email = (data.get("email") or "").strip()
+        # Current clients send ``email`` while the legacy login page sends
+        # ``username``.  Accept either one so existing accounts can sign in.
+        identifier = (data.get("email") or data.get("username") or "").strip()
         password = data.get("password") or ""
 
-        if not email or not password:
+        if not identifier or not password:
             return (
                 jsonify(
                     {
                         "success": False,
-                        "error": "Email and password are required",
+                        "error": "Email or username and password are required",
                     }
                 ),
                 400,
             )
 
-        user = db_manager.get_user_by_email(email)
+        user = db_manager.get_user_by_login_identifier(identifier)
         if not user:
             return (
                 jsonify(
