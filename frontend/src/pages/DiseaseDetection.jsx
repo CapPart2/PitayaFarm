@@ -23,6 +23,7 @@ export default function DiseaseDetection() {
   const [confirmationMessage, setConfirmationMessage] = useState('')
   const [expandedDiseaseIndex, setExpandedDiseaseIndex] = useState(null)
   const fileInputRef = useRef(null)
+  const phoneCameraInputRef = useRef(null)
   const videoRef = useRef(null)
   const streamRef = useRef(null)
 
@@ -386,6 +387,22 @@ export default function DiseaseDetection() {
                   Stop
                 </button>
               </div>
+              <input
+                ref={phoneCameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="sr-only"
+                onChange={handleFileChange}
+                aria-label="Use phone camera"
+              />
+              <button
+                type="button"
+                onClick={() => phoneCameraInputRef.current?.click()}
+                className="min-h-[44px] w-full px-4 rounded-xl border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 font-medium touch-manipulation"
+              >
+                Use phone camera instead
+              </button>
             </div>
           )}
 

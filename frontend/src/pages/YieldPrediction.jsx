@@ -62,6 +62,7 @@ export default function YieldPrediction() {
   const videoRef = useRef(null)
   const streamRef = useRef(null)
   const fileInputRef = useRef(null)
+  const phoneCameraInputRef = useRef(null)
   const videoInputRef = useRef(null)
   const [loadingDetect, setLoadingDetect] = useState(false)
   const [detectionResult, setDetectionResult] = useState(null)
@@ -479,6 +480,7 @@ export default function YieldPrediction() {
           <div className="flex gap-3 mb-4">
             <label className="flex-1">
               <input id="yield-file" type="file" accept="image/*" className="sr-only" onChange={(e) => handleFileChange(e)} />
+              <input ref={phoneCameraInputRef} type="file" accept="image/*" capture="environment" className="sr-only" onChange={handleFileChange} aria-label="Use phone camera" />
               <div className="min-h-[140px] rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer p-4">
                 <div className="text-center text-gray-500 dark:text-gray-400">
                   <span className="text-3xl block mb-2">📤</span>
@@ -489,6 +491,7 @@ export default function YieldPrediction() {
 
             <div className="w-1/3 flex flex-col gap-2">
               <button type="button" onClick={startCamera} className="min-h-[44px] px-3 rounded-xl bg-pitaya-primary text-white">Start Camera</button>
+              <button type="button" onClick={() => phoneCameraInputRef.current?.click()} className="min-h-[44px] px-3 rounded-xl border border-pitaya-primary text-pitaya-primary dark:text-green-400">Use Phone Camera</button>
               <button type="button" onClick={capturePhoto} className="min-h-[44px] px-3 rounded-xl border border-pitaya-primary text-pitaya-primary">Capture</button>
               <button type="button" onClick={stopCamera} className="min-h-[44px] px-3 rounded-xl border">Stop</button>
             </div>

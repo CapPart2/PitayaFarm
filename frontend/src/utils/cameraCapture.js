@@ -12,50 +12,94 @@ const PREFERRED_VIDEO_CONSTRAINTS = {
  * to the laptop/webcam camera. A facingMode "ideal" constraint is compatible
  * with browsers that do not expose a rear camera.
  */
-export async function openCaptureCamera() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    throw new Error('This browser does not support camera capture.')
-  }
-
-  try {
-    return await navigator.mediaDevices.getUserMedia(PREFERRED_VIDEO_CONSTRAINTS)
-  } catch (preferredError) {
-    try {
-      return await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-    } catch (fallbackError) {
-      throw new Error('Camera access failed. Please allow camera permission and try again.')
-    }
+function cameraErrorMessage(error) {
+  switch (error?.name) {
+    case 'NotAllowedError':
+    case 'PermissionDeniedError':
+      return 'Camera permission was blocked. In Chrome, tap the lock icon beside the address, allow Camera, then reload this page.'
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return 'No camera was found. Connect or enable a camera, then try again.'
+    case 'NotReadableError':
+    case 'TrackStartError':
+      return 'The camera is being used by another app. Close other camera apps, then try again.'
+    case 'OverconstrainedError':
+      return 'This camera does not support the requested settings. Please try again.'
+    case 'SecurityError':
+      return 'Camera access requires a secure HTTPS connection.'
+    default:
+      return 'Camera access failed. Please allow camera permission and try again.'
   }
 }
 
-export async function attachCameraStream(video, stream) {
-  if (!video) throw new Error('Camera preview is not ready.')
-
-  video.srcObject = stream
-  if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
-    await new Promise((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        cleanup()
-        reject(new Error('Camera did not provide a video frame.'))
-      }, 8000)
-      const cleanup = () => {
-        window.clearTimeout(timeoutId)
-        video.removeEventListener('loadedmetadata', onLoaded)
-        video.removeEventListener('error', onError)
-      }
-      const onLoaded = () => {
-        cleanup()
-        resolve()
-      }
-      const onError = () => {
-        cleanup()
-        reject(new Error('Camera preview could not be started.'))
-      }
-      video.addEventListener('loadedmetadata', onLoaded, { once: true })
-      video.addEventListener('error', onError, { once: true })
-    })
+export async function openCaptureCamera() {
+  if (!window.isSecureContext) {
+    throw new Error('Camera access requires a secure HTTPS connection.')
   }
-  await video.play().catch(() => undefined)
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error('This browser does not support live camera capture. Use “Use phone camera” instead.')
+  }
+
+  const attempts = [
+    PREFERRED_VIDEO_CONSTRAINTS,
+    { video: { facingMode: { ideal: 'environment' } }, audio: false },
+    { video: true, audio: false },
+  ]
+  let lastError
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (error) {
+      lastError = error
+      // A permission/security error cannot be resolved by trying a different
+      // constraint. Stop immediately and show the actionable browser guidance.
+      if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError' || error?.name === 'SecurityError') break
+    }
+  }
+  throw new Error(cameraErrorMessage(lastError))
+}
+
+export async function attachCameraStream(video, stream) {
+  if (!video) {
+    stream?.getTracks().forEach((track) => track.stop())
+    throw new Error('Camera preview is not ready.')
+  }
+
+  try {
+    // Register listeners before assigning srcObject. Some Android devices can
+    // emit loadedmetadata immediately, before a listener added afterwards.
+    const metadataReady = video.readyState >= HTMLMediaElement.HAVE_METADATA
+      ? Promise.resolve()
+      : new Promise((resolve, reject) => {
+          const timeoutId = window.setTimeout(() => {
+            cleanup()
+            reject(new Error('Camera did not provide a video frame.'))
+          }, 8000)
+          const cleanup = () => {
+            window.clearTimeout(timeoutId)
+            video.removeEventListener('loadedmetadata', onLoaded)
+            video.removeEventListener('error', onError)
+          }
+          const onLoaded = () => {
+            cleanup()
+            resolve()
+          }
+          const onError = () => {
+            cleanup()
+            reject(new Error('Camera preview could not be started.'))
+          }
+          video.addEventListener('loadedmetadata', onLoaded, { once: true })
+          video.addEventListener('error', onError, { once: true })
+        })
+
+    video.srcObject = stream
+    await metadataReady
+    await video.play()
+  } catch (error) {
+    stream?.getTracks().forEach((track) => track.stop())
+    video.srcObject = null
+    throw error
+  }
 }
 
 /** Capture a high-quality JPEG only after the video has real dimensions. */
