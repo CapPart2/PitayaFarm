@@ -37,24 +37,25 @@ class ImprovedDiseaseDetection:
         ]
         self.img_size = (224, 224)
 
-        # This model was trained only with disease classes; it has no
-        # ``healthy`` label.  Treat a label as a disease only when the signal
-        # is very strong.  This deliberately favours "no detection" over a
-        # false disease result for a visually healthy stem.
+        # The classifier was trained with disease classes only, so the app
+        # must keep a confidence floor.  These floors are deliberately below
+        # 85-90%: softmax confidence drops noticeably on real field photos,
+        # especially after cropping a lesion from a large stem.  A low or
+        # ambiguous prediction is still returned as no detection below.
         self.confidence_thresholds = {
-            "Anthracnose": 0.85,
-            "Black Spot": 0.90,
-            "Brown Spot": 0.88,
-            "Root Rot": 0.88,
-            "Soft Rot": 0.88,
-            "Stem Rot": 0.90,
-            "Stem_Canker": 0.90,
-            "Twig Blight": 0.85,
-            "White Spot": 0.88,
+            "Anthracnose": 0.35,
+            "Black Spot": 0.35,
+            "Brown Spot": 0.35,
+            "Root Rot": 0.40,
+            "Soft Rot": 0.35,
+            "Stem Rot": 0.40,
+            "Stem_Canker": 0.45,
+            "Twig Blight": 0.35,
+            "White Spot": 0.35,
         }
 
         # Minimum confidence for any disease detection.
-        self.min_confidence = 0.85
+        self.min_confidence = 0.35
 
     def load_model(self):
         """Load the best available model"""
@@ -164,34 +165,17 @@ class ImprovedDiseaseDetection:
             return {"quality_score": 0, "is_suitable": False}
 
     def preprocess_image(self, image):
-        """Enhanced preprocessing with proper normalization"""
+        """Apply exactly the resize and rescaling used during training."""
         try:
-            # Enhance image first
-            image = self.enhance_image(image)
+            if image.mode != "RGB":
+                image = image.convert("RGB")
 
-            # Resize
+            # Disease.ipynb trains with ImageDataGenerator(rescale=1./255).
+            # Contrast enhancement, sharpening, and histogram equalisation
+            # were not training transformations and shift real uploads away
+            # from the distribution the model learned.
             image = image.resize(self.img_size, Image.Resampling.LANCZOS)
-
-            # Convert to numpy array
-            img_array = np.array(image, dtype=np.float32)
-
-            # Enhanced normalization
-            # 1. Standard scaling to [0,1]
-            img_array = img_array / 255.0
-
-            # 2. Apply histogram equalization for better contrast
-            if len(img_array.shape) == 3:
-                # Convert to LAB color space for better processing
-                lab = cv2.cvtColor(
-                    (img_array * 255).astype(np.uint8), cv2.COLOR_RGB2LAB
-                )
-                lab[:, :, 0] = cv2.equalizeHist(lab[:, :, 0])  # Equalize L channel
-                img_array = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB) / 255.0
-
-            # 3. Add batch dimension
-            img_array = np.expand_dims(img_array, axis=0)
-
-            return img_array
+            return np.expand_dims(np.asarray(image, dtype=np.float32) / 255.0, axis=0)
 
         except Exception as e:
             logger.error(f"Error preprocessing image: {str(e)}")
@@ -455,7 +439,10 @@ class ImprovedDiseaseDetection:
             all_predictions.items(), key=lambda x: x[1], reverse=True
         )
 
-        quality_multiplier = 1.0 + max(0.0, 0.7 - float(quality_score)) * 0.5
+        # Poor images need slightly stronger evidence, but field captures
+        # should not be rejected merely because their quality score is below a
+        # studio-image standard.
+        quality_multiplier = 1.0 + max(0.0, 0.45 - float(quality_score)) * 0.15
 
         candidates = []
         for disease_name, confidence in sorted_predictions[:4]:
@@ -464,7 +451,7 @@ class ImprovedDiseaseDetection:
             ) * quality_multiplier
 
             if disease_name == "Stem_Canker":
-                required_confidence = max(required_confidence, 0.90)
+                required_confidence = max(required_confidence, 0.45)
 
             if confidence < required_confidence:
                 continue
@@ -481,12 +468,12 @@ class ImprovedDiseaseDetection:
         return sorted_predictions, candidates
 
     def _aggregate_tile_candidates(self, tile_candidates):
-        """Return only disease labels confirmed in the full stem and a tile.
+        """Rank predictions from the complete stem and its focused tiles.
 
-        A disease-only classifier always chooses one of its disease labels.
-        Requiring the same high-confidence label in both views prevents a
-        background detail, normal stem spine, or one weak crop from becoming a
-        false diagnosis.
+        A complete-stem prediction is sufficient once it meets the class
+        threshold.  A tile is supporting evidence, not a mandatory second
+        vote: a lesion can be outside a particular tile or become too small
+        after tiling, which otherwise hides genuine disease detections.
         """
         grouped = {}
         for candidate in tile_candidates:
@@ -502,19 +489,21 @@ class ImprovedDiseaseDetection:
                 entry for entry in entries if entry["source"] != "whole_image"
             ]
 
-            # Both the complete stem and at least one focused crop must agree.
-            # Do not inflate a weak score with a tile-count bonus.
-            if not whole_image_entries or not tile_entries:
+            # Never diagnose from an isolated tile: background remnants can
+            # still influence it.  However, do not require a tile to agree
+            # with a strong complete-stem prediction.
+            if not whole_image_entries:
                 continue
 
             whole_confidence = max(entry["confidence"] for entry in whole_image_entries)
-            tile_confidence = max(entry["confidence"] for entry in tile_entries)
-            confirmed_confidence = min(whole_confidence, tile_confidence)
+            tile_confidence = max(
+                (entry["confidence"] for entry in tile_entries), default=None
+            )
 
             scored_diseases.append(
                 {
                     "disease_name": disease_name,
-                    "confidence": confirmed_confidence,
+                    "confidence": whole_confidence,
                     "severity": self.get_disease_severity(disease_name),
                     "tile_support": len(tile_entries),
                     "whole_image_confidence": whole_confidence,
@@ -750,21 +739,29 @@ class ImprovedDiseaseDetection:
             all_candidates = whole_candidates + tile_candidates
             detected_diseases = self._aggregate_tile_candidates(all_candidates)
 
+            # A disease-only classifier always has a top label.  Keep the
+            # no-detection path for uncertain images by requiring separation
+            # from the runner-up as well as the class confidence floor.
+            if detected_diseases and len(whole_sorted_predictions) >= 2:
+                top_name, top_confidence = whole_sorted_predictions[0]
+                second_confidence = whole_sorted_predictions[1][1]
+                required_confidence = self.confidence_thresholds.get(
+                    top_name, self.min_confidence
+                ) * (1.0 + max(0.0, 0.45 - float(quality["quality_score"])) * 0.15)
+                if (
+                    top_confidence < required_confidence
+                    or top_confidence - second_confidence < 0.05
+                ):
+                    detected_diseases = []
+
             if not detected_diseases:
-                # Do not fall back to the model's top class here: it has no
-                # healthy class and would force a disease label.  A diagnosis
-                # needs high, consistent evidence from the full stem and a
-                # focused tile; otherwise surface an explicit no-detection.
-                result = {
-                    "success": True,
-                    "disease_name": None,
-                    "confidence": 0,
-                    "severity": "none",
-                    "message": "No disease detection found. No clear and consistent disease symptoms were identified.",
-                    "reason": "insufficient_disease_evidence",
-                    "all_predictions": whole_sorted_predictions[:5],
-                    "detected_diseases": [],
-                }
+                # Preserve the uncertainty guard for healthy/unclear photos,
+                # but do not turn every missing tile match into a 0% result.
+                # validate_prediction checks the class floor and the gap from
+                # the runner-up before returning a disease.
+                result = self.validate_prediction(
+                    whole_image_predictions, quality["quality_score"]
+                )
             else:
                 primary_disease = detected_diseases[0]
                 result = {
