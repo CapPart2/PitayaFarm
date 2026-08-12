@@ -354,6 +354,24 @@ class ImprovedDiseaseDetection:
             # rectangle still contains soil, leaves, pots, and other objects;
             # a disease-only model can otherwise classify that background.
             component_mask = np.where(labels == component_index, 255, 0).astype(np.uint8)
+
+            # Dark canker/rot lesions may not pass the green-or-brown colour
+            # test above.  If they are enclosed by the selected stem, they
+            # belong to the subject—not the background—and must reach the
+            # classifier.  Flood filling from outside identifies only those
+            # enclosed holes without admitting unrelated foliage or soil.
+            padded_mask = cv2.copyMakeBorder(
+                component_mask, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0
+            )
+            exterior = padded_mask.copy()
+            flood_mask = np.zeros(
+                (padded_mask.shape[0] + 2, padded_mask.shape[1] + 2),
+                dtype=np.uint8,
+            )
+            cv2.floodFill(exterior, flood_mask, (0, 0), 255)
+            enclosed_lesions = cv2.bitwise_not(exterior)[1:-1, 1:-1]
+            component_mask = cv2.bitwise_or(component_mask, enclosed_lesions)
+
             dilation_size = max(3, int(round(min(width, height) * 0.018)) | 1)
             dilation_kernel = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, (dilation_size, dilation_size)
@@ -371,6 +389,7 @@ class ImprovedDiseaseDetection:
                 "centre_distance": centre_distance,
                 "bbox": [left, top, right, bottom],
                 "background_masked": True,
+                "lesion_pixels_preserved": True,
             }
         except Exception as exc:
             logger.error(f"Error extracting stem region: {str(exc)}")
@@ -468,12 +487,12 @@ class ImprovedDiseaseDetection:
         return sorted_predictions, candidates
 
     def _aggregate_tile_candidates(self, tile_candidates):
-        """Rank predictions from the complete stem and its focused tiles.
+        """Combine disease evidence from the masked stem and separate tiles.
 
-        A complete-stem prediction is sufficient once it meets the class
-        threshold.  A tile is supporting evidence, not a mandatory second
-        vote: a lesion can be outside a particular tile or become too small
-        after tiling, which otherwise hides genuine disease detections.
+        A whole-stem result can establish a primary disease.  A secondary
+        disease is accepted only when it is independently seen in at least
+        two focused tiles, allowing mixed infections without treating a single
+        background remnant as another disease.
         """
         grouped = {}
         for candidate in tile_candidates:
@@ -489,34 +508,78 @@ class ImprovedDiseaseDetection:
                 entry for entry in entries if entry["source"] != "whole_image"
             ]
 
-            # Never diagnose from an isolated tile: background remnants can
-            # still influence it.  However, do not require a tile to agree
-            # with a strong complete-stem prediction.
-            if not whole_image_entries:
-                continue
-
-            whole_confidence = max(entry["confidence"] for entry in whole_image_entries)
+            whole_confidence = max(
+                (entry["confidence"] for entry in whole_image_entries), default=None
+            )
+            tile_sources = {entry["source"] for entry in tile_entries}
+            tile_support = len(tile_sources)
             tile_confidence = max(
                 (entry["confidence"] for entry in tile_entries), default=None
             )
-
-            scored_diseases.append(
-                {
-                    "disease_name": disease_name,
-                    "confidence": whole_confidence,
-                    "severity": self.get_disease_severity(disease_name),
-                    "tile_support": len(tile_entries),
-                    "whole_image_confidence": whole_confidence,
-                    "tile_confidence": tile_confidence,
-                }
+            tile_average = (
+                sum(entry["confidence"] for entry in tile_entries) / len(tile_entries)
+                if tile_entries
+                else None
             )
+
+            if whole_confidence is not None:
+                scored_diseases.append(
+                    {
+                        "disease_name": disease_name,
+                        "confidence": whole_confidence,
+                        "severity": self.get_disease_severity(disease_name),
+                        "tile_support": tile_support,
+                        "whole_image_confidence": whole_confidence,
+                        "tile_confidence": tile_confidence,
+                        "evidence": "whole_stem",
+                    }
+                )
+                continue
+
+            # A secondary disease can be localised to a small portion of the
+            # stem and therefore be weak in the full-stem prediction.  Require
+            # two distinct tiles and a stronger tile score before surfacing it.
+            secondary_floor = max(
+                self.confidence_thresholds.get(disease_name, self.min_confidence),
+                0.45,
+            )
+            if tile_support >= 2 and tile_average is not None and tile_average >= secondary_floor:
+                scored_diseases.append(
+                    {
+                        "disease_name": disease_name,
+                        "confidence": tile_average,
+                        "severity": self.get_disease_severity(disease_name),
+                        "tile_support": tile_support,
+                        "whole_image_confidence": None,
+                        "tile_confidence": tile_confidence,
+                        "evidence": "two_tiles",
+                    }
+                )
 
         scored_diseases.sort(
             key=lambda item: (item["confidence"], item.get("tile_support", 0)),
             reverse=True,
         )
 
-        return scored_diseases[:3]
+        if not scored_diseases:
+            return []
+
+        # Prefer a complete-stem diagnosis as the primary result. Additional
+        # labels need independent tile evidence; multiple softmax values from
+        # the same full-stem image are not proof of multiple infections.
+        whole_stem_diseases = [
+            disease for disease in scored_diseases
+            if disease.get("evidence") == "whole_stem"
+        ]
+        primary = (
+            whole_stem_diseases[0] if whole_stem_diseases else scored_diseases[0]
+        )
+        additional = [
+            disease for disease in scored_diseases
+            if disease["disease_name"] != primary["disease_name"]
+            and disease.get("tile_support", 0) >= 2
+        ]
+        return [primary, *additional[:2]]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
@@ -742,7 +805,11 @@ class ImprovedDiseaseDetection:
             # A disease-only classifier always has a top label.  Keep the
             # no-detection path for uncertain images by requiring separation
             # from the runner-up as well as the class confidence floor.
-            if detected_diseases and len(whole_sorted_predictions) >= 2:
+            if (
+                len(detected_diseases) == 1
+                and detected_diseases[0].get("evidence") == "whole_stem"
+                and len(whole_sorted_predictions) >= 2
+            ):
                 top_name, top_confidence = whole_sorted_predictions[0]
                 second_confidence = whole_sorted_predictions[1][1]
                 required_confidence = self.confidence_thresholds.get(
