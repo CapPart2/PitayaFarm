@@ -79,8 +79,8 @@ const adminAuthApi = {
       body: JSON.stringify({ username, password }),
     });
 
-    if (response.success && response.token) {
-      setAdminToken(response.token);
+    if (response.success && response.adminToken) {
+      setAdminToken(response.adminToken);
     }
 
     return response;

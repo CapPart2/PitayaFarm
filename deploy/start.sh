@@ -16,6 +16,13 @@ fi
 
 mkdir -p "$PITAYA_DATA_DIR/uploads"
 
+# Set PITAYA_RESET_ADMIN_PASSWORD=1 for one deployment only when the
+# persisted Railway database needs its admin password reset. Remove it after a
+# successful login so a future deploy cannot reset the account unexpectedly.
+if [[ "${PITAYA_RESET_ADMIN_PASSWORD:-}" == "1" ]]; then
+  python /app/reset_admin.py
+fi
+
 # Legacy dashboard code still refers to these project-relative paths.  Point
 # them at the persistent Railway volume without changing its public URLs.
 ln -sfn "$PITAYA_DATA_DIR/uploads" /app/uploads

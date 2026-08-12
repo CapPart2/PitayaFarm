@@ -1,9 +1,14 @@
-import sqlite3
 import hashlib
+import os
+import sqlite3
 
 def reset_admin_user():
-    """Reset or create admin user"""
-    db_path = "pitaya_database.db"
+    """Reset or create the admin account from Railway environment variables."""
+    data_dir = os.environ.get("PITAYA_DATA_DIR", ".")
+    db_path = os.path.join(data_dir, "pitaya_database.db")
+    password = os.environ.get("DEFAULT_ADMIN_PASSWORD", "")
+    if not password or password == "admin123":
+        raise SystemExit("Set DEFAULT_ADMIN_PASSWORD to a strong value before resetting admin.")
     
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
@@ -28,26 +33,26 @@ def reset_admin_user():
             )
         """)
     
-    # Delete existing admin user if exists
-    cursor.execute("DELETE FROM users WHERE Username = 'admin'")
-    
-    # Create new admin user
-    default_password = hashlib.sha256("admin123".encode()).hexdigest()
-    cursor.execute(
-        """
-        INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
-            "admin",
-            default_password,
-            "admin@pitaya.com",
-            "System",
-            "Administrator",
-            "admin",
-            "active",
-        ),
-    )
+    password_hash = hashlib.sha256(password.encode()).hexdigest()
+    cursor.execute("SELECT UserID FROM users WHERE Username = ?", ("admin",))
+    existing = cursor.fetchone()
+    if existing:
+        cursor.execute(
+            """
+            UPDATE users
+            SET PasswordHash = ?, Email = ?, FirstName = ?, LastName = ?, Role = ?, Status = ?
+            WHERE Username = ?
+            """,
+            (password_hash, "admin@pitaya.com", "System", "Administrator", "admin", "active", "admin"),
+        )
+    else:
+        cursor.execute(
+            """
+            INSERT INTO users (Username, PasswordHash, Email, FirstName, LastName, Role, Status)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+            ("admin", password_hash, "admin@pitaya.com", "System", "Administrator", "admin", "active"),
+        )
     
     conn.commit()
     
@@ -56,14 +61,12 @@ def reset_admin_user():
     user = cursor.fetchone()
     
     if user:
-        print(f"Admin user created successfully!")
+        print("Admin account reset successfully.")
         print(f"UserID: {user[0]}")
         print(f"Username: {user[1]}")
         print(f"Role: {user[2]}")
         print(f"Status: {user[3]}")
-        print(f"\nLogin credentials:")
-        print(f"Username: admin")
-        print(f"Password: admin123")
+        print("Use the Admin Login page with username: admin")
     else:
         print("Failed to create admin user")
     

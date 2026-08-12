@@ -18,6 +18,7 @@ export default function AdminLogin() {
     try {
       const resp = await adminAuthApi.login(username.trim(), password)
       if (resp.success) {
+        if (resp.adminToken) setAdminToken(resp.adminToken)
         // store admin user and token
         const adminPayload = {
           ...resp.user,
@@ -41,8 +42,8 @@ export default function AdminLogin() {
       <form onSubmit={handleSubmit} className="w-full max-w-md bg-white p-6 rounded-lg shadow">
         <h2 className="text-lg font-semibold mb-4">Admin Login</h2>
         {error && <div className="mb-3 text-sm text-red-600">{error}</div>}
-        <label className="block text-sm">Username</label>
-        <input value={username} onChange={(e) => setUsername(e.target.value)} className="w-full p-2 border rounded mb-3" />
+        <label className="block text-sm">Admin username</label>
+        <input value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" className="w-full p-2 border rounded mb-3" />
         <label className="block text-sm">Password</label>
         <div className="relative mb-4">
           <input

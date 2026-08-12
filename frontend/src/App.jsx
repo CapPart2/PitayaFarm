@@ -6,6 +6,7 @@ import Library from './components/Library'
 import AdminLayout from './layouts/AdminLayout'
 import AppLayout from './layouts/AppLayout'
 import AdminDashboard from './pages/AdminDashboard'
+import AdminLogin from './pages/AdminLogin'
 import AdminLogs from './pages/AdminLogs'
 import AdminRecords from './pages/AdminRecords'
 import AdminReports from './pages/AdminReports'
@@ -88,7 +89,7 @@ function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/signup" element={<Signup />} />
       <Route path="/verify-email" element={<VerifyEmail />} />
-      <Route path="/admin/login" element={<Navigate to="/login" replace />} />
+      <Route path="/admin/login" element={<AdminLogin />} />
 
       <Route
         path="/app"
