@@ -11,7 +11,7 @@ function safeTrim(value) {
 
 export default function Signup() {
   const navigate = useNavigate()
-  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
+  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
   const [email, setEmail] = useState('')
   const [username, setUsername] = useState('')
   const [name, setName] = useState('')

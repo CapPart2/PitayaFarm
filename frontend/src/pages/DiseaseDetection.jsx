@@ -72,9 +72,6 @@ export default function DiseaseDetection() {
       // Use the prediction API
       const response = await predictionApi.predictDisease(file)
 
-      // Predict endpoint already persists detections; broadcast refresh for Reports/Dashboard modules.
-      window.dispatchEvent(new Event('pitaya:refresh'))
-      
       // Handle enhanced response from new API
       if (response.detection) {
         if (response.detection.disease_name) {

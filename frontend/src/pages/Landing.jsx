@@ -7,7 +7,7 @@ const buttonBase =
 
 export default function Landing() {
   const navigate = useNavigate()
-  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
+  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
 
   useEffect(() => {
     document.documentElement.classList.remove('dark')

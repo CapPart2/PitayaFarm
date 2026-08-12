@@ -16,7 +16,7 @@ const OFFLINE_MESSAGE = 'Offline. Waiting for connection...'
 
 export default function Loading() {
   const navigate = useNavigate()
-  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
+  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
   const [progress, setProgress] = useState(0)
   const [connectionLabel, setConnectionLabel] = useState('Checking connection...')
   const [isOnline, setIsOnline] = useState(navigator.onLine)

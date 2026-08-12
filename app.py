@@ -380,10 +380,6 @@ def predict():
             if detected_diseases and len(detected_diseases) > 1:
                 # Multiple diseases detected - get info for all
                 diseases_info = []
-                session_id = (
-                    uuid.uuid4().hex
-                )  # Generate session ID for multi-disease detection
-
                 for disease_data in detected_diseases:
                     disease_info = get_disease_info(disease_data["disease_name"])
                     diseases_info.append(
@@ -406,22 +402,9 @@ def predict():
                         }
                     )
 
-                    # Save each disease detection to database with image path
-                    db_manager.add_disease_detection(
-                        disease_type=disease_data["disease_name"],
-                        severity=disease_data["severity"],
-                        confidence=disease_data["confidence"] * 100,
-                        image_path=saved_filename,
-                        session_id=session_id,
-                        user_id=user_id,
-                        additional_diseases=(
-                            detected_diseases[1:]
-                            if disease_data == detected_diseases[0]
-                            else None
-                        ),
-                    )
-
-                # Create alert for primary disease
+                # This is a preview only. Persisting a detection creates its
+                # matching alert and can send a high-severity email, so that
+                # must happen only after the user presses "Add Detection".
                 alert = {
                     "disease_name": detected_diseases[0]["disease_name"],
                     "severity": detected_diseases[0]["severity"],
@@ -454,16 +437,8 @@ def predict():
                 # Single disease detected - maintain backward compatibility
                 disease_info = get_disease_info(detection["disease_name"])
 
-                # Save detection to database with image path
-                db_manager.add_disease_detection(
-                    disease_type=detection["disease_name"],
-                    severity=detection["severity"],
-                    confidence=detection["confidence_level"],
-                    image_path=saved_filename,
-                    user_id=user_id,
-                )
-
-                # Create alert
+                # Keep this alert as preview information. The real alert and
+                # any high-severity email are created only by Add Detection.
                 alert = {
                     "disease_name": detection["disease_name"],
                     "severity": detection["severity"],

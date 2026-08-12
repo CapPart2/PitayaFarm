@@ -53,7 +53,7 @@ export default function AdminLayout() {
   const [confirmLogout, setConfirmLogout] = useState(false)
   const pageTitle = getPageTitle(location.pathname)
 
-  const logoUrl = `${import.meta.env.BASE_URL}logoCaps.png`
+  const logoUrl = `${import.meta.env.BASE_URL}pitaya-logo.png`
 
   const handleBrandClick = () => {
     setMobileMenuOpen(false)

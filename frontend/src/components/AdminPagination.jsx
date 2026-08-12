@@ -4,18 +4,8 @@ function pageItems(currentPage, totalPages) {
   if (totalPages <= 7) return Array.from({ length: totalPages }, (_, index) => index + 1)
 
   const visible = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1])
-  if (currentPage <= 3) {
-    visible.add(2)
-    visible.add(3)
-    visible.add(4)
-    visible.add(5)
-  }
-  if (currentPage >= totalPages - 2) {
-    visible.add(totalPages - 1)
-    visible.add(totalPages - 2)
-    visible.add(totalPages - 3)
-    visible.add(totalPages - 4)
-  }
+  if (currentPage <= 3) [2, 3, 4, 5].forEach((page) => visible.add(page))
+  if (currentPage >= totalPages - 2) [totalPages - 1, totalPages - 2, totalPages - 3, totalPages - 4].forEach((page) => visible.add(page))
 
   const pages = [...visible].filter((page) => page >= 1 && page <= totalPages).sort((a, b) => a - b)
   return pages.reduce((items, page, index) => {
@@ -32,30 +22,35 @@ export default function AdminPagination({ currentPage, totalPages, onPageChange,
   const buttonClass = 'inline-flex h-10 min-w-10 items-center justify-center rounded-md border border-gray-300 bg-white px-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 disabled:cursor-not-allowed disabled:opacity-45 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700'
 
   return (
-    <div className="flex flex-col gap-3 border-t border-gray-200 px-4 py-4 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+    <div className="flex flex-col gap-3 border-t border-gray-200 px-3 py-4 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between sm:px-6">
       <p className="text-center text-sm text-gray-500 dark:text-gray-400 sm:text-left">
         Showing {start}-{end} of {total} entries
       </p>
-      <nav className="flex flex-wrap items-center justify-center gap-1.5" aria-label="Pagination">
+      <nav className="flex w-full items-center justify-center gap-1.5 sm:w-auto" aria-label="Pagination">
         <button type="button" onClick={() => onPageChange(currentPage - 1)} disabled={currentPage === 1} className={`${buttonClass} gap-1 px-3`} aria-label="Previous page">
           <ChevronLeft className="h-4 w-4" aria-hidden />
           <span className="hidden sm:inline">Prev</span>
         </button>
-        {pageItems(currentPage, totalPages).map((item) =>
-          typeof item === 'string' ? (
-            <span key={item} className="flex h-10 min-w-5 items-center justify-center text-sm text-gray-500 dark:text-gray-400" aria-hidden>…</span>
-          ) : (
-            <button
-              key={item}
-              type="button"
-              onClick={() => onPageChange(item)}
-              aria-current={item === currentPage ? 'page' : undefined}
-              className={`${buttonClass} ${item === currentPage ? `${activeClass} text-white hover:brightness-95 dark:text-white` : ''}`}
-            >
-              {item}
-            </button>
-          )
-        )}
+        <span className="inline-flex h-10 min-w-0 flex-1 items-center justify-center rounded-md bg-gray-100 px-3 text-sm font-medium text-gray-700 dark:bg-gray-700 dark:text-gray-200 sm:hidden">
+          Page {currentPage} of {totalPages}
+        </span>
+        <div className="hidden flex-wrap items-center justify-center gap-1.5 sm:flex">
+          {pageItems(currentPage, totalPages).map((item) =>
+            typeof item === 'string' ? (
+              <span key={item} className="flex h-10 min-w-5 items-center justify-center text-sm text-gray-500 dark:text-gray-400" aria-hidden>...</span>
+            ) : (
+              <button
+                key={item}
+                type="button"
+                onClick={() => onPageChange(item)}
+                aria-current={item === currentPage ? 'page' : undefined}
+                className={`${buttonClass} ${item === currentPage ? `${activeClass} text-white hover:brightness-95 dark:text-white` : ''}`}
+              >
+                {item}
+              </button>
+            )
+          )}
+        </div>
         <button type="button" onClick={() => onPageChange(currentPage + 1)} disabled={currentPage === totalPages} className={`${buttonClass} gap-1 px-3`} aria-label="Next page">
           <span className="hidden sm:inline">Next</span>
           <ChevronRight className="h-4 w-4" aria-hidden />

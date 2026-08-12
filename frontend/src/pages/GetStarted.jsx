@@ -7,7 +7,7 @@ const buttonBase =
 
 export default function GetStarted() {
   const navigate = useNavigate()
-  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
+  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
 
   return (
     <div className="min-h-screen overflow-hidden relative bg-gradient-to-br from-pitaya-bg via-white to-pitaya-pale bg-gradient animate-gradient">

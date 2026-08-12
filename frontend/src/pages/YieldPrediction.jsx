@@ -101,7 +101,6 @@ export default function YieldPrediction() {
   const [savingToChart, setSavingToChart] = useState(false)
   const [savedMessage, setSavedMessage] = useState(null)
   const [blockName, setBlockName] = useState('Field A')
-  const autoSavedKeysRef = useRef(new Set())
 
   // Load/refresh chart data from API
   const loadChartData = async (showSpinner = false) => {
@@ -173,11 +172,6 @@ export default function YieldPrediction() {
       const resp = await uploadYieldVideo(file, 0.25)
       if (resp && resp.success) {
         setVideoCountResult(resp.data)
-        const detectedFruits = Number(resp?.data?.total_fruits ?? resp?.data?.total_mature_fruits ?? 0)
-        const autoKey = `video:${resp?.data?.annotated_video_url || file.name}:${detectedFruits}`
-        await handleSaveToChart(detectedFruits, 'video', { silent: true, dedupeKey: autoKey })
-        // Refresh charts with new data
-        loadChartData(true)
       } else {
         console.warn('Video detection failed', resp)
         setVideoError(resp?.error || 'Video detection failed. Please try again.')
@@ -404,9 +398,6 @@ export default function YieldPrediction() {
       const resp = await uploadYieldImage(file, 0.25)
       if (resp && resp.success) {
         setDetectionResult(resp.data)
-        const fruitCount = Number(resp.data?.detections?.length || 0)
-        const autoKey = `image:${resp?.data?.annotated_image || file.name}:${fruitCount}`
-        await handleSaveToChart(fruitCount, 'image', { silent: true, dedupeKey: autoKey })
       } else {
         console.warn('Detection failed', resp)
       }
@@ -417,9 +408,7 @@ export default function YieldPrediction() {
     }
   }
 
-  const handleSaveToChart = async (matureFruits, uploadType = 'image', options = {}) => {
-    const { silent = false, dedupeKey = null } = options
-    if (dedupeKey && autoSavedKeysRef.current.has(dedupeKey)) return
+  const handleSaveToChart = async (matureFruits, uploadType = 'image') => {
 
     const fruits = Number(matureFruits) || 0
     if (fruits <= 0) return
@@ -431,23 +420,16 @@ export default function YieldPrediction() {
       console.log(`Saving ${fruits} fruits to yield report (Location: ${location}, Type: ${uploadType})`)
       const resp = await saveYieldToChart(fruits, location, null, uploadType)
       if (resp && resp.success) {
-        if (dedupeKey) autoSavedKeysRef.current.add(dedupeKey)
-        if (!silent) {
-          setSavedMessage({ type: 'success', text: `✅ Saved ${fruits} fruits (${location}) to chart!` })
-        }
+        setSavedMessage({ type: 'success', text: `✅ Saved ${fruits} fruits (${location}) to chart!` })
         console.log('Successfully saved to yield report')
         loadChartData(true)
         window.dispatchEvent(new Event('pitaya:refresh'))
       } else {
-        if (!silent) {
-          setSavedMessage({ type: 'error', text: `❌ Failed to save: ${resp?.error || 'Unknown error'}` })
-        }
+        setSavedMessage({ type: 'error', text: `❌ Failed to save: ${resp?.error || 'Unknown error'}` })
         console.error('Save failed:', resp?.error)
       }
     } catch (err) {
-      if (!silent) {
-        setSavedMessage({ type: 'error', text: `❌ Error: ${err.message}` })
-      }
+      setSavedMessage({ type: 'error', text: `❌ Error: ${err.message}` })
       console.error('Save error:', err)
     } finally {
       setSavingToChart(false)
@@ -590,7 +572,7 @@ export default function YieldPrediction() {
                     disabled={savingToChart || liveSessionTotal === 0}
                     className="min-h-[36px] px-3 py-1.5 rounded-lg bg-pitaya-primary text-white hover:bg-pitaya-leaf disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-medium"
                   >
-                    {savingToChart ? '⏳ Saving...' : '💾 Save to Report'}
+                    {savingToChart ? 'Saving...' : 'Add Detection'}
                   </button>
                   <button
                     type="button"
@@ -686,7 +668,7 @@ export default function YieldPrediction() {
                           {savingToChart ? (
                             <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
                           ) : (
-                            <>📊 Save {fruitCount} fruits to Chart</>
+                            <>Add Detection ({fruitCount} fruits)</>
                           )}
                         </button>
                         {savedMessage && (
@@ -737,7 +719,7 @@ export default function YieldPrediction() {
                   {savingToChart ? (
                     <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Saving…</>
                   ) : (
-                    <>📊 Save {Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0)} fruits to Chart</>
+                    <>Add Detection ({Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0)} fruits)</>
                   )}
                 </button>
                 {savedMessage && (

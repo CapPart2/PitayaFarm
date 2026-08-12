@@ -13,7 +13,7 @@ function getStoredDetails() {
 export default function VerifyEmail() {
   const navigate = useNavigate()
   const location = useLocation()
-  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}logoCaps.png`, [])
+  const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
   const initial = location.state?.challengeId ? location.state : getStoredDetails()
   const [details, setDetails] = useState(initial)
   const [code, setCode] = useState('')

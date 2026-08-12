@@ -52,7 +52,7 @@ export default function AppLayout() {
   const [confirmLogout, setConfirmLogout] = useState(false)
   const pageTitle = getPageTitle(location.pathname)
 
-  const logoUrl = `${import.meta.env.BASE_URL}logoCaps.png`
+  const logoUrl = `${import.meta.env.BASE_URL}pitaya-logo.png`
 
   const handleBrandClick = () => {
     setMobileMenuOpen(false)
@@ -118,7 +118,7 @@ export default function AppLayout() {
             aria-label="Go to Dashboard"
           >
             <img
-              src="/logoCaps.png"
+              src="/pitaya-logo.png"
               alt="PITAYA"
               className="w-10 h-10 rounded-xl object-contain"
             />
