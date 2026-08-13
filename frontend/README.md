@@ -28,6 +28,13 @@ npm run build
 
 Output in `dist/`. Can be served by Django static or any static host.
 
+### Android APK download
+
+Set `VITE_ANDROID_APK_URL` to the public URL of the final APK before building.
+The landing page's **Download Android APK** button uses this value. Upload the
+APK to a file host or release service; do not add large generated APK files to
+the repository or Railway deployment.
+
 ## Structure
 
 - `/` – **Landing**: full-screen hero, PITAYA title, subtitle, “Enter Dashboard” CTA, Framer Motion + floating icons

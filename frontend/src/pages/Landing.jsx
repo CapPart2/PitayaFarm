@@ -8,6 +8,7 @@ const buttonBase =
 export default function Landing() {
   const navigate = useNavigate()
   const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
+  const apkDownloadUrl = import.meta.env.VITE_ANDROID_APK_URL || '/downloads/pitaya.apk'
 
   useEffect(() => {
     document.documentElement.classList.remove('dark')
@@ -78,10 +79,18 @@ export default function Landing() {
               >
                 Learn More
               </button>
+
+              <a
+                href={apkDownloadUrl}
+                download
+                className="min-h-[44px] px-6 py-3 rounded-xl font-semibold border border-pitaya-primary/30 bg-pitaya-pale/80 text-pitaya-deep shadow-sm transition-colors hover:bg-pitaya-light dark:bg-gray-900/70 dark:text-pitaya-light dark:hover:bg-gray-800/80 inline-flex items-center justify-center"
+              >
+                Download Android APK
+              </a>
             </div>
 
-            <p className="mt-6 text-sm text-gray-800 dark:text-gray-200">
-              Smart Farming Through AI and Precision Technology
+            <p className="mt-4 text-sm text-gray-800 dark:text-gray-200">
+              Android app available for download. Installation approval is required on your device.
             </p>
           </motion.section>
 
