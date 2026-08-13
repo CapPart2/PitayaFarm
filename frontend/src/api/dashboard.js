@@ -194,8 +194,7 @@ export async function uploadYieldImage(file, conf = 0.55, detectionMode = 'photo
     form.append('image', file);
     form.append('conf', String(conf));
     form.append('detection_mode', detectionMode);
-    // Only the trained mature-dragon-fruit class is allowed to create a count.
-    form.append('method', 'yolo');
+    form.append('method', 'hybrid');
 
     const response = await fetch(`${API_BASE}/yield-detect`, {
       method: 'POST',
@@ -222,7 +221,7 @@ export async function uploadYieldVideo(videoFile, conf = 0.55) {
     const form = new FormData();
     form.append('video', videoFile);
     form.append('conf', String(conf));
-    form.append('method', 'yolo');
+    form.append('method', 'hybrid');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
@@ -249,6 +248,7 @@ export async function detectYieldFromStream(streamUrl, conf = 0.55) {
     const form = new FormData();
     form.append('stream_url', streamUrl);
     form.append('conf', String(conf));
+    form.append('method', 'hybrid');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',

@@ -9,32 +9,14 @@ Requires the same YOLO weights and ultralytics setup as dashboard_api.py.
 """
 
 import argparse
-import os
-
 import cv2
-from ultralytics import YOLO
 
 from dashboard_api import (
-    MODEL_PATHS,
-    get_mature_class_ids,
-    is_mature_dragonfruit_candidate,
+    detect_focused_mature_fruits,
 )
 
 
-def load_yolo_model():
-    for p in MODEL_PATHS:
-        if os.path.exists(p):
-            return YOLO(p)
-    raise FileNotFoundError("No YOLO weights found in expected locations. Check Yield_detection folder.")
-
-
 def main(source):
-    model = load_yolo_model()
-    names = getattr(model, "names", {}) or {}
-    # Never assume class 0 means mature: in a generic YOLO model it is a
-    # person, so that fallback created false fruit detections.
-    mature_ids = get_mature_class_ids(model)
-
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         raise RuntimeError(f"Could not open video source: {source}")
@@ -46,39 +28,26 @@ def main(source):
         if not ret:
             break
 
-        results = model.track(frame, conf=0.55, persist=True, verbose=False)
-        annotated = frame
-        for r in results:
-            boxes = getattr(r, "boxes", None)
-            if boxes is None or len(boxes) == 0:
-                continue
-            clss = boxes.cls.tolist()
-            confs = boxes.conf.tolist()
-            ids = boxes.id.tolist() if getattr(boxes, "id", None) is not None else [None] * len(clss)
-            for box, cls_id, track_id, box_conf in zip(boxes.xyxy.tolist(), clss, ids, confs):
-                x1, y1, x2, y2 = map(int, box)
-                if not (
-                    int(cls_id) in mature_ids
-                    and is_mature_dragonfruit_candidate(frame, box, box_conf)
-                ):
-                    # Do not draw a box for a rejected object.  It is not a
-                    # mature fruit and must not look like a detection.
-                    continue
-
-                label = "Mature fruit"
-                color = (255, 0, 0)
-                if track_id is not None:
-                    total_ids.add(int(track_id))
-                cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
-                cv2.putText(
-                    annotated,
-                    label,
-                    (x1, max(20, y1 - 10)),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    color,
-                    2,
-                )
+        annotated = frame.copy()
+        for detection in detect_focused_mature_fruits(frame, image_mode=True):
+            x1, y1, x2, y2 = map(int, detection["box"])
+            cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+            # A stable centroid is sufficient for the standalone preview.
+            # The browser and uploaded-video flows use their own multi-frame
+            # trackers before saving a count.
+            fruit_id = (round(cx / 24), round(cy / 24))
+            total_ids.add(fruit_id)
+            color = (255, 0, 0)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(
+                annotated,
+                "Mature fruit",
+                (x1, max(20, y1 - 10)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                2,
+            )
 
         cv2.putText(
             annotated,
