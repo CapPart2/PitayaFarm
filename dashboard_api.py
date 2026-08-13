@@ -413,13 +413,17 @@ def is_hsv_fruit_candidate(
     # Field noise (flowers, soil specks, and shadows) is much smaller than a
     # countable fruit. Partial objects on the edge cannot be counted reliably.
     min_side = max(36, int(min(frame_width, frame_height) * 0.04))
+    # A fruit cut off by the edge has unstable contours and is the usual
+    # source of an oversized/nearby box as the camera pans.  Wait until the
+    # entire fruit is inside the frame before it can enter the tracker.
+    edge_margin = max(16, int(round(min_side * 0.75)))
     if (
         min(width, height) < min_side
         or box_area < max(1800.0, frame_area * 0.0015)
-        or x <= 1
-        or y <= 1
-        or x + width >= frame_width - 1
-        or y + height >= frame_height - 1
+        or x <= edge_margin
+        or y <= edge_margin
+        or x + width >= frame_width - edge_margin
+        or y + height >= frame_height - edge_margin
     ):
         return False
 
@@ -953,7 +957,9 @@ def count_mature_in_video(
                 if max_frames and frame_count > max_frames:
                     break
 
-                detections = detect_focused_mature_fruits(frame, image_mode=True)
+                # Video has stable successive frames, so use its narrower
+                # colour range and never use still-photo recovery boxes.
+                detections = detect_focused_mature_fruits(frame, image_mode=False)
                 frame_h, frame_w = frame.shape[:2]
                 max_distance = max(32.0, float(np.hypot(frame_w, frame_h)) * 0.10)
                 matched_ids = set()
@@ -1201,7 +1207,11 @@ def annotate_video_and_count(
         # Keep a confirmed track for eight seconds.  This is long enough for
         # focus hunting, dropped frames, or a hand briefly crossing the lens,
         # preventing the same fruit from being assigned a second count.
-        track_max_missed = max(240, int(round(fps * 8.0)))
+        # Keep counted identities for the whole practical recording window.
+        # A fruit that leaves the frame briefly or is revisited later in the
+        # same sweep must reconnect to its original identity, never create a
+        # second yield count.
+        track_max_missed = max(2160, int(round(fps * 45.0)))
         display_hold_frames = max(6, int(round(fps * 0.25)))
         min_confirm_hits = 3
 
@@ -1240,7 +1250,9 @@ def annotate_video_and_count(
             # The same fruit-region detector is used by image upload, browser
             # camera, and video. It produces one box per mature fruit, never a
             # whole-plant box from the unreliable YOLO model.
-            focused_detections = detect_focused_mature_fruits(frame, image_mode=True)
+            # A moving video must not use the broad still-photo recovery pass:
+            # it produces oversized boxes that absorb nearby red regions.
+            focused_detections = detect_focused_mature_fruits(frame, image_mode=False)
             mature_boxes = [
                 (int(d["box"][0]), int(d["box"][1]),
                  int(d["box"][2] - d["box"][0]), int(d["box"][3] - d["box"][1]))

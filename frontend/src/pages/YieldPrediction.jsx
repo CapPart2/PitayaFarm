@@ -25,7 +25,10 @@ const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }
 const CHART_COLORS = { line: '#2f6a21', bar: '#3c7b2b', barAlt: '#6bb854' }
 const MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024
 const LIVE_CONFIRMATION_HITS = 3
-const LIVE_TRACK_TTL_MS = 9000
+// Retain a counted identity for the full practical capture session.  A fruit
+// must never be counted again simply because autofocus, an arm, or a nearby
+// branch hid it for a few seconds.
+const LIVE_TRACK_TTL_MS = 180000
 
 const DASHBOARD_MEDIA_ORIGIN = (() => {
   const configuredBase =
