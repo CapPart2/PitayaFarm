@@ -583,6 +583,11 @@ export default function YieldPrediction() {
                     </span>
                   </div>
                 </div>
+                {!liveDetecting && liveFrameMatureCount === 0 && (
+                  <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                    <strong>No mature detection found</strong>
+                  </p>
+                )}
                 <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
                   Tip: If you see double counting, increase camera stability or reduce movement; this tracker matches fruits by bounding-box centroid distance across frames.
                 </p>
@@ -722,11 +727,18 @@ export default function YieldPrediction() {
             )}
             {!videoUploading && videoCountResult && !videoError && (
               <>
-                <p className="text-sm text-gray-700 dark:text-gray-200 mb-2">
-                  Total fruits detected in the uploaded video:{' '}
-                  <span className="font-semibold text-pitaya-primary">{Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0)}</span>
-                  {videoCountResult.frame_count ? ` (processed ${videoCountResult.frame_count} frames)` : ''}.
-                </p>
+                {Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0) === 0 ? (
+                  <div className="mb-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-200">
+                    <strong>No mature detection found</strong>
+                    <p className="mt-1 text-xs">{videoCountResult.message || 'No mature detection found.'}</p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-700 dark:text-gray-200 mb-2">
+                    Total fruits detected in the uploaded video:{' '}
+                    <span className="font-semibold text-pitaya-primary">{Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0)}</span>
+                    {videoCountResult.frame_count ? ` (processed ${videoCountResult.frame_count} frames)` : ''}.
+                  </p>
+                )}
                 <div className="flex flex-col gap-1 mb-2">
                   <label className="text-xs text-gray-500 dark:text-gray-400 font-medium">Block / Location</label>
                   <input
@@ -739,7 +751,7 @@ export default function YieldPrediction() {
                 </div>
                 <button
                   type="button"
-                  disabled={savingToChart}
+                  disabled={savingToChart || Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0) === 0}
                   onClick={() => handleSaveToChart(Number(videoCountResult.total_fruits ?? videoCountResult.total_mature_fruits ?? 0), 'video')}
                   className="mb-3 min-h-[38px] px-4 rounded-lg bg-pitaya-primary text-white text-sm font-medium hover:bg-pitaya-leaf disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
                 >
