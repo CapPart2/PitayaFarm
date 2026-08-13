@@ -17,9 +17,7 @@ from ultralytics import YOLO
 from dashboard_api import (
     MODEL_PATHS,
     get_mature_class_ids,
-    has_pitaya_fruit_context,
-    is_video_mature_fruit,
-    validate_dragonfruit_maturity_scene,
+    is_mature_dragonfruit_candidate,
 )
 
 
@@ -50,20 +48,18 @@ def main(source):
 
         results = model.track(frame, conf=0.55, persist=True, verbose=False)
         annotated = frame
-        scene_is_valid = validate_dragonfruit_maturity_scene(frame).get("valid", False)
         for r in results:
             boxes = getattr(r, "boxes", None)
             if boxes is None or len(boxes) == 0:
                 continue
             clss = boxes.cls.tolist()
+            confs = boxes.conf.tolist()
             ids = boxes.id.tolist() if getattr(boxes, "id", None) is not None else [None] * len(clss)
-            for box, cls_id, track_id in zip(boxes.xyxy.tolist(), clss, ids):
+            for box, cls_id, track_id, box_conf in zip(boxes.xyxy.tolist(), clss, ids, confs):
                 x1, y1, x2, y2 = map(int, box)
                 if not (
-                    scene_is_valid
-                    and int(cls_id) in mature_ids
-                    and is_video_mature_fruit(frame, box)
-                    and has_pitaya_fruit_context(frame, x1, y1, x2 - x1, y2 - y1)
+                    int(cls_id) in mature_ids
+                    and is_mature_dragonfruit_candidate(frame, box, box_conf)
                 ):
                     # Do not draw a box for a rejected object.  It is not a
                     # mature fruit and must not look like a detection.

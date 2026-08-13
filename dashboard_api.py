@@ -280,17 +280,19 @@ def has_dragonfruit_bracts(frame_bgr, box) -> bool:
     return 0.003 <= green_ratio <= 0.08
 
 
-def is_live_mature_dragonfruit(frame_bgr, box) -> bool:
-    """Accept a real mature fruit in live video while rejecting lookalikes.
+def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> bool:
+    """Return whether a model box looks like a mature dragon fruit.
 
-    Live frames often contain motion blur, shadows, or cactus arms that hide
-    the green bracts.  Require a mature red/pink fruit core and nearby pitaya
-    plant tissue, but do not require bracts to be visible *inside* every box.
-    The caller also confirms the candidate across multiple frames.
+    This is deliberately the *same* lightweight validation for uploads,
+    camera captures, and video frames.  The previous still-photo-only check
+    required an almost uniformly red, unobstructed fruit.  Real ripe fruit on
+    the plant is often shaded or partly covered by a cactus arm, so that gate
+    rejected the custom YOLO model's real detections.
+
+    The custom model class is the primary decision.  These checks only reject
+    implausible model boxes: a broad/skinny object, a box without a ripe-colour
+    core, or a red object that has no nearby pitaya-plant context.
     """
-    if not is_video_mature_fruit(frame_bgr, box):
-        return False
-
     x1, y1, x2, y2 = map(int, box)
     width, height = x2 - x1, y2 - y1
     if width <= 0 or height <= 0:
@@ -299,9 +301,33 @@ def is_live_mature_dragonfruit(frame_bgr, box) -> bool:
     # A fruit is compact/oval. This rejects a broad clothing or torso box,
     # even if it is recorded in front of vegetation.
     aspect_ratio = width / float(height)
-    return 0.45 <= aspect_ratio <= 1.90 and has_pitaya_fruit_context(
-        frame_bgr, x1, y1, width, height
+    if not 0.40 <= aspect_ratio <= 2.10:
+        return False
+
+    # Keep colour validation modest.  It confirms that the detected object is
+    # ripe without requiring a fully red body, which is unreliable under
+    # shadow, glare, blur, and partial occlusion.
+    if mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.08:
+        return False
+
+    if has_pitaya_fruit_context(frame_bgr, x1, y1, width, height):
+        return True
+
+    # A close-up may crop out the surrounding cactus tissue.  Do not lose a
+    # clearly ripe fruit in that case, but allow it only when the detector is
+    # very confident, the ripe core is strong, and the complete scene still
+    # contains plant context.  This keeps a low-confidence red shirt/object
+    # from being accepted just because it is red.
+    return (
+        float(confidence) >= 0.75
+        and mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.18
+        and validate_dragonfruit_maturity_scene(frame_bgr).get("valid", False)
     )
+
+
+def is_live_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> bool:
+    """Backward-compatible name for the common mature-fruit validator."""
+    return is_mature_dragonfruit_candidate(frame_bgr, box, confidence)
 
 
 def is_hsv_fruit_candidate(
@@ -782,6 +808,7 @@ def count_mature_in_video(
 
         xyxys = boxes.xyxy.tolist() if getattr(boxes, "xyxy", None) is not None else []
         clss = boxes.cls.tolist()
+        confs = boxes.conf.tolist()
         ids = (
             boxes.id.tolist()
             if getattr(boxes, "id", None) is not None
@@ -789,25 +816,13 @@ def count_mature_in_video(
         )
         frame_bgr = r.orig_img if getattr(r, "orig_img", None) is not None else None
 
-        # A mature-only model has no reliable "background" result.  Never let
-        # a person, object, or another crop be counted simply because it was
-        # assigned the mature class; the frame must also contain pitaya plant
-        # tissue.
-        if not validate_dragonfruit_maturity_scene(frame_bgr).get("valid", False):
-            continue
-
-        for index, (cls_id, track_id) in enumerate(zip(clss, ids)):
+        for index, (cls_id, track_id, box_conf) in enumerate(zip(clss, ids, confs)):
             if track_id is None:
                 continue
             if int(cls_id) in mature_class_ids:
                 if frame_bgr is not None and index < len(xyxys):
-                    # This helper is used for a live stream, so apply the
-                    # stricter live-camera validator before adding a count.
-                    if not is_live_mature_dragonfruit(frame_bgr, xyxys[index]):
-                        continue
-                    x1, y1, x2, y2 = map(int, xyxys[index])
-                    if not has_pitaya_fruit_context(
-                        frame_bgr, x1, y1, x2 - x1, y2 - y1
+                    if not is_mature_dragonfruit_candidate(
+                        frame_bgr, xyxys[index], box_conf
                     ):
                         continue
                 unique_ids.add(int(track_id))
@@ -1250,9 +1265,8 @@ def annotate_video_and_count(
 
         frame_area = (frame_size[0] * frame_size[1]) if frame_size else 1
         annotated = orig.copy()
-        scene_validation = validate_dragonfruit_maturity_scene(orig)
         boxes = getattr(r, "boxes", None)
-        if scene_validation.get("valid", False) and boxes is not None and len(boxes) > 0:
+        if boxes is not None and len(boxes) > 0:
             xyxys = boxes.xyxy.tolist()
             confs_list = boxes.conf.tolist()
             clss = boxes.cls.tolist()
@@ -1274,9 +1288,9 @@ def annotate_video_and_count(
                     continue
                 if box_w < 20 or box_h < 20:
                     continue
-                if not is_video_mature_fruit(orig, (x1, y1, x2, y2)):
-                    continue
-                if not has_pitaya_fruit_context(orig, x1, y1, x2 - x1, y2 - y1):
+                if not is_mature_dragonfruit_candidate(
+                    orig, (x1, y1, x2, y2), box_conf
+                ):
                     continue
                 is_mature = True
                 # Always draw detection boxes in blue for consistency
@@ -3064,25 +3078,10 @@ def yield_image_detect():
         if frame_bgr is None:
             return jsonify({"success": False, "error": "Failed to read saved image"}), 400
 
+        # Keep scene information for diagnostics, but do not reject an entire
+        # image before the trained detector sees it. A close-up can contain a
+        # real ripe fruit with little visible green plant tissue.
         scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
-        if not scene_validation["valid"]:
-            success, encoded_img = cv2.imencode(".jpg", frame_bgr)
-            if not success:
-                return jsonify({"success": False, "error": "Failed to encode image"}), 500
-            encoded_b64 = base64.b64encode(encoded_img.tobytes()).decode("ascii")
-            return jsonify(
-                {
-                    "success": True,
-                    "data": {
-                        "detections": [],
-                        "annotated_image": f"data:image/jpeg;base64,{encoded_b64}",
-                        "source_path": img_path,
-                        "message": NO_MATURE_DETECTION_MESSAGE,
-                        "reason": scene_validation["reason"],
-                        "scene_validation": scene_validation,
-                    },
-                }
-            )
 
         detections = []
         model = None
@@ -3110,15 +3109,9 @@ def yield_image_detect():
             for b, c, cl in zip(xyxy, confs, clss):
                 if mature_class_ids and int(cl) not in mature_class_ids:
                     continue
-                if frame_bgr is not None and not (
-                    is_live_mature_dragonfruit(frame_bgr, b)
-                    if is_live_capture
-                    else is_fully_mature_fruit(frame_bgr, b)
-                ):
-                    continue
                 x1, y1, x2, y2 = map(int, b)
-                if frame_bgr is not None and not has_pitaya_fruit_context(
-                    frame_bgr, x1, y1, x2 - x1, y2 - y1
+                if frame_bgr is not None and not is_mature_dragonfruit_candidate(
+                    frame_bgr, (x1, y1, x2, y2), c
                 ):
                     continue
                 detections.append(

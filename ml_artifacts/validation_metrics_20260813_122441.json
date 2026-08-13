@@ -1,0 +1,171 @@
+{
+  "overall": {
+    "accuracy": 0.9240121580547113,
+    "precision_macro": 0.9283523597973515,
+    "recall_macro": 0.9354918733642678,
+    "f1_macro": 0.9284287091147583,
+    "precision_weighted": 0.9331925853853773,
+    "recall_weighted": 0.9240121580547113,
+    "f1_weighted": 0.9258822531546684
+  },
+  "per_class": {
+    "Anthracnose": {
+      "precision": 0.8181818181818182,
+      "recall": 0.8709677419354839,
+      "f1_score": 0.84375,
+      "support": 31
+    },
+    "Black Spot": {
+      "precision": 0.7307692307692307,
+      "recall": 1.0,
+      "f1_score": 0.8444444444444444,
+      "support": 19
+    },
+    "Brown Spot": {
+      "precision": 1.0,
+      "recall": 0.8958333333333334,
+      "f1_score": 0.945054945054945,
+      "support": 48
+    },
+    "Root Rot": {
+      "precision": 1.0,
+      "recall": 0.9333333333333333,
+      "f1_score": 0.9655172413793104,
+      "support": 30
+    },
+    "Soft Rot": {
+      "precision": 1.0,
+      "recall": 0.8913043478260869,
+      "f1_score": 0.9425287356321839,
+      "support": 46
+    },
+    "Stem Rot": {
+      "precision": 0.9795918367346939,
+      "recall": 0.9230769230769231,
+      "f1_score": 0.9504950495049505,
+      "support": 52
+    },
+    "Stem_Canker": {
+      "precision": 0.8611111111111112,
+      "recall": 0.9393939393939394,
+      "f1_score": 0.8985507246376812,
+      "support": 66
+    },
+    "Twig Blight": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0,
+      "support": 8
+    },
+    "White Spot": {
+      "precision": 0.9655172413793104,
+      "recall": 0.9655172413793104,
+      "f1_score": 0.9655172413793104,
+      "support": 29
+    }
+  },
+  "confusion_matrix": [
+    [
+      27,
+      1,
+      0,
+      0,
+      0,
+      0,
+      3,
+      0,
+      0
+    ],
+    [
+      0,
+      19,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    [
+      0,
+      2,
+      43,
+      0,
+      0,
+      0,
+      2,
+      0,
+      1
+    ],
+    [
+      0,
+      1,
+      0,
+      28,
+      0,
+      1,
+      0,
+      0,
+      0
+    ],
+    [
+      3,
+      0,
+      0,
+      0,
+      41,
+      0,
+      2,
+      0,
+      0
+    ],
+    [
+      0,
+      2,
+      0,
+      0,
+      0,
+      48,
+      2,
+      0,
+      0
+    ],
+    [
+      3,
+      1,
+      0,
+      0,
+      0,
+      0,
+      62,
+      0,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      8,
+      0
+    ],
+    [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      28
+    ]
+  ],
+  "classification_report": "              precision    recall  f1-score   support\n\n Anthracnose       0.82      0.87      0.84        31\n  Black Spot       0.73      1.00      0.84        19\n  Brown Spot       1.00      0.90      0.95        48\n    Root Rot       1.00      0.93      0.97        30\n    Soft Rot       1.00      0.89      0.94        46\n    Stem Rot       0.98      0.92      0.95        52\n Stem_Canker       0.86      0.94      0.90        66\n Twig Blight       1.00      1.00      1.00         8\n  White Spot       0.97      0.97      0.97        29\n\n    accuracy                           0.92       329\n   macro avg       0.93      0.94      0.93       329\nweighted avg       0.93      0.92      0.93       329\n",
+  "num_classes": 9,
+  "total_samples": 329
+}
