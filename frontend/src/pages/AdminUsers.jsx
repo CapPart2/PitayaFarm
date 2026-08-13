@@ -4,6 +4,8 @@ import {
     Calendar,
     CheckCircle,
     Edit,
+    Eye,
+    EyeOff,
     Mail,
     Plus,
     Search,
@@ -51,6 +53,7 @@ export default function AdminUsers() {
   const [searchTerm, setSearchTerm] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [editingUser, setEditingUser] = useState(null)
+  const [showPassword, setShowPassword] = useState(false)
   const [formData, setFormData] = useState({
     username: '',
     password: '',
@@ -173,11 +176,13 @@ export default function AdminUsers() {
   const openCreateModal = () => {
     setEditingUser(null)
     resetForm()
+    setShowPassword(false)
     setShowModal(true)
   }
 
   const openEditModal = (user) => {
     setEditingUser(user)
+    setShowPassword(false)
     setFormData({
       username: user.Username,
       password: '',
@@ -470,14 +475,24 @@ export default function AdminUsers() {
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                   Password {editingUser && '(leave blank to keep current)'}
                 </label>
-                <input
-                  type="password"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
-                  placeholder={editingUser ? 'Enter new password (optional)' : 'Enter password'}
-                  required={!editingUser}
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    className="w-full px-3 py-2 pr-11 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:text-white"
+                    placeholder={editingUser ? 'Enter new password (optional)' : 'Enter password'}
+                    required={!editingUser}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-gray-500 hover:text-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-inset dark:text-gray-400 dark:hover:text-blue-400"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="h-5 w-5" aria-hidden="true" /> : <Eye className="h-5 w-5" aria-hidden="true" />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">

@@ -1,10 +1,44 @@
 /**
- * Yield API – all chart data is derived from the same raw records endpoint
- * that the Yield Report page uses (/api/dashboard/yield-predictions).
- * Values are raw fruit counts — matching the Yield Report "Fruits Detected" column exactly.
+ * Yield chart data derived from the raw yield-prediction records.
+ * All values are mature-fruit counts.
  */
 import { getPitayaUserScopeHeaders } from './userScope'
 import { dashboardApiUrl, fetchWithTimeout } from './client'
+
+function buildYieldData(records) {
+  const byMonth = {}
+  const byBlock = {}
+  const bySeason = {}
+
+  records.forEach((record) => {
+    const month = (record.prediction_date || '').slice(0, 7) || 'Unknown'
+    const fruits = Number(record.predicted_yield) || 0
+    const block = record.location || 'Unknown'
+    const season = record.season || 'Unknown'
+
+    byMonth[month] = (byMonth[month] || 0) + fruits
+    byBlock[block] = (byBlock[block] || 0) + fruits
+    bySeason[season] = (bySeason[season] || 0) + fruits
+  })
+
+  return {
+    yieldMonthly: Object.entries(byMonth)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([period, fruits]) => ({ period, fruits })),
+    yieldByBlock: Object.entries(byBlock)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([block, fruits]) => ({ block, fruits })),
+    historicalYield: Object.entries(bySeason)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([season, fruits]) => ({ season, fruits })),
+  }
+}
+
+const EMPTY_YIELD_DATA = {
+  yieldMonthly: [],
+  yieldByBlock: [],
+  historicalYield: [],
+}
 
 export async function fetchYield() {
   try {
@@ -13,55 +47,29 @@ export async function fetchYield() {
       headers: getPitayaUserScopeHeaders(),
     })
     if (!res.ok) throw new Error(res.statusText)
+
     const root = await res.json()
     const records = root.data || []
-
-    // ── Daily totals → Daily Total bar chart ───────────────────
-    const byDate = {}
-    records.forEach(r => {
-      const date = (r.prediction_date || '').slice(0, 10) || 'Unknown'
-      byDate[date] = (byDate[date] || 0) + (r.predicted_yield || 0)
-    })
-    const yieldEstimation = Object.entries(byDate)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, fruits]) => ({ period: date, yieldKg: fruits }))
-
-    // ── Per-location totals → By Block bar chart ────────────────
-    const byBlock = {}
-    records.forEach(r => {
-      const loc = r.location || 'Unknown'
-      byBlock[loc] = (byBlock[loc] || 0) + (r.predicted_yield || 0)
-    })
-    const yieldByBlock = Object.entries(byBlock)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([block, fruits]) => ({ block, yieldKg: fruits }))
-
-    // ── Per-season totals → Historical Yield Comparison table ───
-    const bySeason = {}
-    records.forEach(r => {
-      const season = r.season || 'Unknown'
-      bySeason[season] = (bySeason[season] || 0) + (r.predicted_yield || 0)
-    })
-    const historicalYield = Object.entries(bySeason)
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([season, fruits]) => ({ season, yieldKg: fruits }))
-
-    // ── Total fruit count (KPI card) ────────────────────────────
-    const totalFruits = records.reduce((s, r) => s + (r.predicted_yield || 0), 0)
+    const pictureRecords = records.filter((record) => String(record.upload_type || 'image').toLowerCase() !== 'video')
+    const videoRecords = records.filter((record) => String(record.upload_type || '').toLowerCase() === 'video')
 
     return {
-      predictedYield: totalFruits,
-      yieldEstimation,
-      yieldByBlock,
-      historicalYield,
+      predictedYield: records.reduce((sum, record) => sum + (Number(record.predicted_yield) || 0), 0),
+      ...buildYieldData(records),
+      yieldByMedia: {
+        picture: buildYieldData(pictureRecords),
+        video: buildYieldData(videoRecords),
+      },
     }
-  } catch (e) {
-    console.warn('Yield API unavailable, returning empty data:', e.message)
+  } catch (error) {
+    console.warn('Yield API unavailable, returning empty data:', error.message)
     return {
       predictedYield: 0,
-      yieldEstimation: [],
-      yieldByBlock: [],
-      historicalYield: [],
+      ...EMPTY_YIELD_DATA,
+      yieldByMedia: {
+        picture: { ...EMPTY_YIELD_DATA },
+        video: { ...EMPTY_YIELD_DATA },
+      },
     }
   }
 }

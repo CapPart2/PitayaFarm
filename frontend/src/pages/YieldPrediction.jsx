@@ -1,5 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
 import { useEffect, useRef, useState } from 'react'
+import { Image, Video } from 'lucide-react'
 import {
     Bar,
     BarChart,
@@ -56,6 +57,7 @@ function resolveDashboardMediaUrl(mediaPath) {
 
 export default function YieldPrediction() {
   const [loading, setLoading] = useState(true)
+  const [captureMode, setCaptureMode] = useState('picture')
   const [datasetKey, setDatasetKey] = useState('estimation')
   const [data, setData] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
@@ -438,7 +440,8 @@ export default function YieldPrediction() {
 
   if (loading || !data) return <LoadingSpinner className="min-h-[60vh]" />
 
-  const { yieldEstimation, yieldByBlock, historicalYield } = data
+  const mediaYieldData = data.yieldByMedia?.[captureMode] || data
+  const { yieldMonthly, yieldByBlock, historicalYield } = mediaYieldData
 
   return (
     <motion.div
@@ -448,22 +451,38 @@ export default function YieldPrediction() {
       className="max-w-6xl mx-auto space-y-6"
     >
       <div>
-        <h1 className="font-display font-bold text-2xl text-gray-900 dark:text-gray-100">Yield Prediction</h1>
-        <p className="text-gray-600 dark:text-gray-300 mt-1 text-base">Drone-based yield estimation and historical comparison.</p>
+        <h1 className="font-display font-bold text-2xl text-gray-900 dark:text-gray-100">Assessing Yield</h1>
+        <p className="text-gray-600 dark:text-gray-300 mt-1 text-base">Count mature dragon fruits from a picture or video.</p>
       </div>
 
       {/* Drone image preview panel with Upload + Camera */}
       <motion.div variants={item} className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-card overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-600">
-          <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100">Drone Image Preview</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Upload or capture an image or video to estimate mature fruits.</p>
+          <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100">Capture mature fruits</h2>
         </div>
         <div className="p-6">
+          <div className="mb-6 inline-flex rounded-xl bg-gray-100 p-1 dark:bg-gray-700">
+            <button
+              type="button"
+              onClick={() => { setCaptureMode('picture'); stopLiveCapture() }}
+              className={`flex min-h-[44px] items-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${captureMode === 'picture' ? 'bg-white text-pitaya-primary shadow-sm dark:bg-gray-600 dark:text-pitaya-light' : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'}`}
+            >
+              <Image className="h-4 w-4" aria-hidden="true" /> Picture
+            </button>
+            <button
+              type="button"
+              onClick={() => { setCaptureMode('video'); stopCamera() }}
+              className={`flex min-h-[44px] items-center gap-2 rounded-lg px-4 text-sm font-semibold transition-colors ${captureMode === 'video' ? 'bg-white text-pitaya-primary shadow-sm dark:bg-gray-600 dark:text-pitaya-light' : 'text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white'}`}
+            >
+              <Video className="h-4 w-4" aria-hidden="true" /> Video
+            </button>
+          </div>
+          {captureMode === 'picture' && <>
           <div className="flex gap-3 mb-4">
             <label className="flex-1">
               <input id="yield-file" type="file" accept="image/*" className="sr-only" onChange={(e) => handleFileChange(e)} />
               <input ref={phoneCameraInputRef} type="file" accept="image/*" capture="environment" className="sr-only" onChange={handleFileChange} aria-label="Use phone camera" />
-              <div className="min-h-[140px] rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer p-4">
+              <div className="min-h-[140px] rounded-xl border-2 border-dashed border-gray-300 dark:border-gray-600 flex items-center justify-center cursor-pointer p-4 transition-colors hover:border-pitaya-primary hover:bg-pitaya-light/30 dark:hover:bg-gray-700">
                 <div className="text-center text-gray-500 dark:text-gray-400">
                   <span className="text-3xl block mb-2">📤</span>
                   <p className="text-sm">Click to select or drag-and-drop an image</p>
@@ -472,17 +491,19 @@ export default function YieldPrediction() {
             </label>
 
             <div className="w-1/3 flex flex-col gap-2">
-              <button type="button" onClick={startCamera} className="min-h-[44px] px-3 rounded-xl bg-pitaya-primary text-white">Start Camera</button>
-              <button type="button" onClick={() => phoneCameraInputRef.current?.click()} className="min-h-[44px] px-3 rounded-xl border border-pitaya-primary text-pitaya-primary dark:text-green-400">Use Phone Camera</button>
-              <button type="button" onClick={capturePhoto} className="min-h-[44px] px-3 rounded-xl border border-pitaya-primary text-pitaya-primary">Capture</button>
+              <button type="button" onClick={startCamera} className="min-h-[44px] px-3 rounded-xl bg-pitaya-primary text-white">Open camera</button>
+              <button type="button" onClick={() => phoneCameraInputRef.current?.click()} className="min-h-[44px] px-3 rounded-xl border border-pitaya-primary text-pitaya-primary dark:text-green-400">Phone camera</button>
+              <button type="button" onClick={capturePhoto} className="min-h-[44px] px-3 rounded-xl border border-pitaya-primary text-pitaya-primary">Take picture</button>
               <button type="button" onClick={stopCamera} className="min-h-[44px] px-3 rounded-xl border">Stop</button>
             </div>
           </div>
+          </>}
 
+          {captureMode === 'video' && <>
           <div className="flex items-center gap-3 mb-4">
             <label>
               <input type="file" accept="video/*" className="sr-only" onChange={handleVideoChange} />
-              <div className="min-h-[44px] px-4 py-2 rounded-xl border border-dashed cursor-pointer text-sm text-gray-600 dark:text-gray-200">
+              <div className="min-h-[48px] px-4 py-3 rounded-xl border border-dashed border-gray-300 cursor-pointer text-sm font-medium text-gray-700 hover:border-pitaya-primary hover:text-pitaya-primary dark:border-gray-600 dark:text-gray-200">
                 📹 Upload video file to count <span className="font-semibold">mature fruits</span>
               </div>
             </label>
@@ -568,7 +589,7 @@ export default function YieldPrediction() {
                 <div className="mt-3 grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => handleSaveToChart(liveSessionTotal, 'image')}
+                    onClick={() => handleSaveToChart(liveSessionTotal, 'video')}
                     disabled={savingToChart || liveSessionTotal === 0}
                     className="min-h-[36px] px-3 py-1.5 rounded-lg bg-pitaya-primary text-white hover:bg-pitaya-leaf disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs font-medium"
                   >
@@ -600,6 +621,9 @@ export default function YieldPrediction() {
             </div>
           </div>
 
+          </>}
+
+          {captureMode === 'picture' && <>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Camera / Preview panel - always shows camera when active */}
             <div className="rounded-lg overflow-hidden bg-gray-50 dark:bg-gray-900 min-h-[200px] flex flex-col items-center justify-center relative">
@@ -687,6 +711,9 @@ export default function YieldPrediction() {
             </div>
           </div>
 
+          </>}
+
+          {captureMode === 'video' && <>
           {/* Video detection summary card */}
           <div className="mt-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 p-4">
             <p className="font-medium text-gray-900 dark:text-gray-50 mb-1">Video Detection Summary</p>
@@ -769,6 +796,7 @@ export default function YieldPrediction() {
               <p className="text-sm text-gray-500 dark:text-gray-400">Analyzing video… please wait.</p>
             )}
           </div>
+          </>}
         </div>
       </motion.div>
 
@@ -779,7 +807,7 @@ export default function YieldPrediction() {
           onClick={() => setDatasetKey('estimation')}
           className={`min-h-[44px] px-5 rounded-lg text-sm font-medium transition-colors touch-manipulation ${datasetKey === 'estimation' ? 'bg-white dark:bg-gray-600 text-pitaya-primary dark:text-pitaya-light shadow-card' : 'text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100'}`}
         >
-          Daily Total
+          By month
         </button>
         <button
           type="button"
@@ -794,7 +822,7 @@ export default function YieldPrediction() {
       <motion.div variants={item} className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-card p-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100">
-            {datasetKey === 'estimation' ? 'Daily Yield Total (Fruits)' : 'Yield by Block (Fruits)'}
+            {datasetKey === 'estimation' ? 'Monthly Yield Total (Fruits)' : 'Yield by Block (Fruits)'}
           </h2>
           {chartRefreshing && (
             <span className="text-xs text-pitaya-primary animate-pulse">⟳ Updating…</span>
@@ -819,13 +847,13 @@ export default function YieldPrediction() {
                 transition={{ duration: 0.25 }}
                 className="h-full w-full"
               >
-                {yieldEstimation.length === 0 ? (
+                {yieldMonthly.length === 0 ? (
                   <div className="h-full flex items-center justify-center text-gray-400 dark:text-gray-500 text-sm">
-                    No yield data yet. Upload or capture an image/video above to record detections.
+                    No {captureMode} yield data yet.
                   </div>
                 ) : (
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={yieldEstimation} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
+                  <BarChart data={yieldMonthly} margin={{ top: 5, right: 20, left: 0, bottom: 30 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false} />
                     <XAxis
                       dataKey="period"
@@ -836,7 +864,7 @@ export default function YieldPrediction() {
                       height={55}
                       tickFormatter={(v) => {
                         if (typeof v !== 'string') return v
-                        try { return new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) } catch { return v }
+                        try { return new Date(`${v}-01T00:00:00`).toLocaleDateString(undefined, { month: 'short', year: 'numeric' }) } catch { return v }
                       }}
                     />
                     <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" unit=" fruits" />
@@ -844,11 +872,11 @@ export default function YieldPrediction() {
                       contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb' }}
                       formatter={(v) => [`${v} fruits`, 'Total Detected']}
                       labelFormatter={(v) => {
-                        try { return new Date(v).toLocaleDateString(undefined, { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' }) } catch { return v }
+                        try { return new Date(`${v}-01T00:00:00`).toLocaleDateString(undefined, { year: 'numeric', month: 'long' }) } catch { return v }
                       }}
                     />
                     <Legend />
-                    <Bar dataKey="yieldKg" name="Fruits Detected" fill={CHART_COLORS.bar} radius={[6, 6, 0, 0]} maxBarSize={60} />
+                    <Bar dataKey="fruits" name="Fruits Detected" fill={CHART_COLORS.bar} radius={[6, 6, 0, 0]} maxBarSize={60} />
                   </BarChart>
                 </ResponsiveContainer>
                 )}
@@ -874,7 +902,7 @@ export default function YieldPrediction() {
                     <YAxis tick={{ fontSize: 12 }} stroke="#6b7280" />
                     <Tooltip contentStyle={{ borderRadius: 12, border: '1px solid #e5e7eb' }} formatter={(v) => [`${v} fruits`, 'Total Detected']} />
                     <Legend />
-                    <Bar dataKey="yieldKg" name="Fruits Detected" fill={CHART_COLORS.bar} radius={[6, 6, 0, 0]} />
+                    <Bar dataKey="fruits" name="Fruits Detected" fill={CHART_COLORS.bar} radius={[6, 6, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
                 )}
@@ -888,7 +916,7 @@ export default function YieldPrediction() {
       <motion.div variants={item} className="rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-card overflow-hidden">
         <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-700">
           <h2 className="font-display font-semibold text-lg text-gray-900 dark:text-gray-100">Historical Yield Comparison</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Season-over-season yield (kg)</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Season-over-season fruit count</p>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left border-collapse">
@@ -908,7 +936,7 @@ export default function YieldPrediction() {
                   className="border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50/80 dark:hover:bg-gray-700/60 transition-colors"
                 >
                   <td className="px-5 py-3 text-sm font-medium text-gray-900 dark:text-gray-100">{row.season}</td>
-                  <td className="px-5 py-3 text-sm text-right font-semibold text-pitaya-primary">{row.yieldKg.toLocaleString()} fruits</td>
+                  <td className="px-5 py-3 text-sm text-right font-semibold text-pitaya-primary">{row.fruits.toLocaleString()} fruits</td>
                 </motion.tr>
               ))}
             </tbody>
