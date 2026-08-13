@@ -24,6 +24,8 @@ const item = { hidden: { opacity: 0, y: 10 }, show: { opacity: 1, y: 0 } }
 
 const CHART_COLORS = { line: '#2f6a21', bar: '#3c7b2b', barAlt: '#6bb854' }
 const MAX_VIDEO_UPLOAD_BYTES = 500 * 1024 * 1024
+const LIVE_CONFIRMATION_HITS = 3
+const LIVE_TRACK_TTL_MS = 9000
 
 const DASHBOARD_MEDIA_ORIGIN = (() => {
   const configuredBase =
@@ -53,6 +55,19 @@ function resolveDashboardMediaUrl(mediaPath) {
   }
 
   return `${DASHBOARD_MEDIA_ORIGIN}${path.startsWith('/') ? '' : '/'}${path}`
+}
+
+function boxIou(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return 0
+  const [ax1, ay1, ax2, ay2] = a
+  const [bx1, by1, bx2, by2] = b
+  const ix1 = Math.max(ax1, bx1)
+  const iy1 = Math.max(ay1, by1)
+  const ix2 = Math.min(ax2, bx2)
+  const iy2 = Math.min(ay2, by2)
+  const intersection = Math.max(0, ix2 - ix1) * Math.max(0, iy2 - iy1)
+  const union = Math.max(1, (ax2 - ax1) * (ay2 - ay1) + (bx2 - bx1) * (by2 - by1) - intersection)
+  return intersection / union
 }
 
 export default function YieldPrediction() {
@@ -276,12 +291,12 @@ export default function YieldPrediction() {
           const detections = Array.isArray(resp.data?.detections) ? resp.data.detections : []
           const validDetections = detections.filter((d) => Array.isArray(d?.box) && d.box.length === 4)
 
-          // --- Lightweight tracker to avoid double counting across frames ---
-          // Each detection becomes a centroid point; if it matches an existing track (within a distance threshold)
-          // we treat it as the same fruit. Otherwise we create a new track and increment the session total.
+          // Require the same fruit to survive three samples before counting it.
+          // Tracks are retained through short camera blur/autofocus gaps so a
+          // blinking box never becomes another fruit in the session total.
           const now = Date.now()
           const diag = Math.sqrt(videoW * videoW + videoH * videoH)
-          const matchDist = diag * 0.06 // ~6% of diagonal; adjust if needed for your camera height
+          const matchDist = diag * 0.10
           const tracks = liveTracksRef.current
           const usedTrackIds = new Set()
           let newlyCounted = 0
@@ -293,38 +308,46 @@ export default function YieldPrediction() {
             const cy = (y1 + y2) / 2
 
             let best = null
-            let bestDist = Infinity
+            let bestScore = Infinity
             for (const tr of tracks) {
               if (usedTrackIds.has(tr.id)) continue
               const dx = tr.cx - cx
               const dy = tr.cy - cy
               const dist = Math.sqrt(dx * dx + dy * dy)
-              if (dist < bestDist) {
-                bestDist = dist
-                best = tr
+              const overlap = boxIou(tr.box, det.box)
+              const previousDiag = Math.sqrt((tr.box[2] - tr.box[0]) ** 2 + (tr.box[3] - tr.box[1]) ** 2)
+              const currentDiag = Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+              const allowedDist = Math.max(Math.min(matchDist, Math.max(previousDiag, currentDiag) * 1.6), 32)
+              if (dist <= allowedDist || overlap >= 0.12) {
+                const score = (dist / allowedDist) - overlap
+                if (score < bestScore) {
+                  bestScore = score
+                  best = tr
+                }
               }
             }
 
-            if (best && bestDist <= matchDist) {
+            if (best) {
               usedTrackIds.add(best.id)
               best.cx = cx
               best.cy = cy
+              best.box = det.box
               best.lastSeen = now
               best.hits = (best.hits || 1) + 1
-              if (!best.counted && best.hits >= 2) {
+              if (!best.counted && best.hits >= LIVE_CONFIRMATION_HITS) {
                 best.counted = true
                 newlyCounted += 1
               }
-              if (best.hits >= 2) confirmedDetections.push(det)
+              if (best.hits >= LIVE_CONFIRMATION_HITS) confirmedDetections.push(det)
             } else {
               const id = liveNextTrackIdRef.current++
-              tracks.push({ id, cx, cy, lastSeen: now, hits: 1, counted: false })
+              tracks.push({ id, cx, cy, box: det.box, lastSeen: now, hits: 1, counted: false })
               usedTrackIds.add(id)
             }
           }
 
-          // Drop stale tracks (fruit not visible anymore)
-          liveTracksRef.current = tracks.filter((t) => now - t.lastSeen <= 2000)
+          // Preserve tracks through several missed frames, then discard them.
+          liveTracksRef.current = tracks.filter((t) => now - t.lastSeen <= LIVE_TRACK_TTL_MS)
           setLiveFrameMatureCount(confirmedDetections.length)
           setLiveDetections(confirmedDetections)
 

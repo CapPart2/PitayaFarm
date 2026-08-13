@@ -39,7 +39,19 @@ MODEL = None
 MODEL_PATHS = [
     "Yield_detection/runs/detect/dragonfruit_maturity5/weights/best.pt",
 ]
+OBJECT_GUARD_PATH = "Yield_detection/yolov8n.pt"
+OBJECT_GUARD_MODEL = None
 MATURE_CLASS_LABELS = {"mature", "fully_red_dragon_fruit"}
+OBJECT_GUARD_LABELS = {
+    "person", "bicycle", "car", "motorcycle", "bus", "train", "truck", "boat",
+    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+    "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "sports ball",
+    "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket",
+    "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl",
+    "chair", "couch", "bed", "dining table", "toilet", "tv", "laptop", "mouse",
+    "remote", "keyboard", "cell phone", "book", "clock", "vase", "scissors",
+    "teddy bear", "hair drier", "toothbrush",
+}
 NO_MATURE_DETECTION_MESSAGE = "No mature detection found."
 # A one-class detector must be conservative: it has no explicit "person" or
 # "background" label to correct a low-confidence guess.  Do not permit clients
@@ -162,6 +174,37 @@ def load_yolo_model():
     # fruit detections after a redeploy.
     get_mature_class_ids(MODEL)
     return MODEL
+
+
+def get_unrelated_object_boxes(frame_bgr):
+    """Find person/object boxes that must never be counted as fruit.
+
+    The detector is a guard only: its output does not create any fruit boxes.
+    It prevents a red shirt, bag, vehicle, or tool from being accepted when a
+    camera frame also contains green vegetation.
+    """
+    global OBJECT_GUARD_MODEL
+    if frame_bgr is None or frame_bgr.size == 0 or not os.path.exists(OBJECT_GUARD_PATH):
+        return []
+
+    try:
+        if OBJECT_GUARD_MODEL is None:
+            from ultralytics import YOLO
+            OBJECT_GUARD_MODEL = YOLO(OBJECT_GUARD_PATH)
+        result = OBJECT_GUARD_MODEL.predict(frame_bgr, conf=0.45, verbose=False)[0]
+        boxes = getattr(result, "boxes", None)
+        if boxes is None or len(boxes) == 0:
+            return []
+        names = getattr(OBJECT_GUARD_MODEL, "names", {}) or {}
+        return [
+            tuple(map(float, box))
+            for box, class_id in zip(boxes.xyxy.tolist(), boxes.cls.tolist())
+            if str(names.get(int(class_id), "")).strip().lower() in OBJECT_GUARD_LABELS
+        ]
+    except Exception as exc:
+        # Guard-model issues must not make fruit detection unavailable.
+        print(f"Object guard unavailable: {exc}")
+        return []
 
 
 def mature_core_ratio(frame_bgr, x: int, y: int, width: int, height: int) -> float:
@@ -571,6 +614,7 @@ def detect_focused_mature_fruits(frame_bgr, image_mode: bool = True):
     _, boxes, _ = detect_mature_fruits_hsv(frame_bgr, image_mode=image_mode)
     detections = []
     frame_area = float(frame_bgr.shape[0] * frame_bgr.shape[1])
+    object_guard_boxes = get_unrelated_object_boxes(frame_bgr)
     for x, y, width, height in boxes:
         if width <= 0 or height <= 0:
             continue
@@ -593,12 +637,25 @@ def detect_focused_mature_fruits(frame_bgr, image_mode: bool = True):
             and core_ratio / max(broad_ripe_ratio, 0.001) < 0.33
         ):
             continue
+
+        x2, y2 = x + width, y + height
+        center_x, center_y = x + (width / 2.0), y + (height / 2.0)
+        # Do not turn a red region inside a detected person or everyday object
+        # into a fruit. Adjacent fruits remain valid because their centre is
+        # outside the person/object box.
+        if any(
+            left <= center_x <= right
+            and top <= center_y <= bottom
+            and (width * height) <= ((right - left) * (bottom - top)) * 0.65
+            for left, top, right, bottom in object_guard_boxes
+        ):
+            continue
         # This score is for display only. The colour/shape/context tests above
         # are the acceptance rule, not a generic-object confidence score.
         confidence = min(0.99, max(0.60, 0.60 + (core_ratio * 1.20)))
         detections.append(
             {
-                "box": [float(x), float(y), float(x + width), float(y + height)],
+                "box": [float(x), float(y), float(x2), float(y2)],
                 "confidence": float(confidence),
                 "class_id": 0,
                 "label": "MATURE",
@@ -847,6 +904,8 @@ def count_mature_in_video(
         tracks = []
         next_track_id = 1
         frame_count = 0
+        min_confirm_hits = 3
+        max_missed_frames = 120
         try:
             while True:
                 ok, frame = cap.read()
@@ -858,8 +917,7 @@ def count_mature_in_video(
 
                 detections = detect_focused_mature_fruits(frame, image_mode=True)
                 frame_h, frame_w = frame.shape[:2]
-                max_distance = max(28.0, float(np.hypot(frame_w, frame_h)) * 0.08)
-                now_tracks = []
+                max_distance = max(32.0, float(np.hypot(frame_w, frame_h)) * 0.10)
                 matched_ids = set()
 
                 for detection in detections:
@@ -871,23 +929,37 @@ def count_mature_in_video(
                         if track["id"] in matched_ids:
                             continue
                         distance = float(np.hypot(track["cx"] - cx, track["cy"] - cy))
-                        if distance <= max_distance and (
+                        overlap = box_iou(detection["box"], track["box"])
+                        if (distance <= max_distance or overlap >= 0.12) and (
                             match_distance is None or distance < match_distance
                         ):
                             match, match_distance = track, distance
 
                     if match is None:
-                        match = {"id": next_track_id, "cx": cx, "cy": cy, "hits": 0}
+                        match = {
+                            "id": next_track_id,
+                            "cx": cx,
+                            "cy": cy,
+                            "box": detection["box"],
+                            "hits": 0,
+                        }
                         next_track_id += 1
-                    match["cx"], match["cy"] = cx, cy
+                        tracks.append(match)
+                    match["cx"], match["cy"], match["box"] = cx, cy, detection["box"]
+                    match["last_seen"] = frame_count
                     match["hits"] = int(match.get("hits", 0)) + 1
                     matched_ids.add(match["id"])
-                    now_tracks.append(match)
                     # Confirm across frames before changing the saved count.
-                    if match["hits"] >= 2:
+                    if match["hits"] >= min_confirm_hits:
                         unique_ids.add(match["id"])
 
-                tracks = now_tracks
+                # A fruit can blink out during autofocus or be covered by an
+                # arm. Retain it long enough to reconnect instead of recounting.
+                tracks = [
+                    track
+                    for track in tracks
+                    if frame_count - int(track.get("last_seen", frame_count)) <= max_missed_frames
+                ]
         finally:
             cap.release()
 
@@ -1077,7 +1149,10 @@ def annotate_video_and_count(
         next_track_id = 1
         active_tracks = []
         unique_ids = set()
-        track_max_missed = max(90, int(round(fps * 3.0)))
+        # Keep a confirmed track for eight seconds.  This is long enough for
+        # focus hunting, dropped frames, or a hand briefly crossing the lens,
+        # preventing the same fruit from being assigned a second count.
+        track_max_missed = max(240, int(round(fps * 8.0)))
         display_hold_frames = max(6, int(round(fps * 0.25)))
         min_confirm_hits = 3
 
