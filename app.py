@@ -181,13 +181,28 @@ def validate_dragonfruit_stem_image(image_path):
         # background rejection before the disease model is called.
         center_y0, center_y1 = arr.shape[0] // 6, (arr.shape[0] * 5) // 6
         center_x0, center_x1 = arr.shape[1] // 6, (arr.shape[1] * 5) // 6
-        central_plant_ratio = float(
-            np.mean(plant_mask[center_y0:center_y1, center_x0:center_x1])
+        central_mask = plant_mask[center_y0:center_y1, center_x0:center_x1]
+        central_plant_ratio = float(np.mean(central_mask))
+        # A severely diseased stem can be entirely yellow/brown. Accept this
+        # only when that material forms a tall, textured subject in the middle
+        # of the camera frame--not a face, shirt, or empty background.
+        central_row_coverage = float(np.mean(np.mean(central_mask, axis=1) >= 0.10))
+        central_dark_ratio = float(
+            np.mean(max_rgb[center_y0:center_y1, center_x0:center_x1] <= 100)
+        )
+        diseased_stem_candidate = (
+            plant_ratio >= 0.06
+            and central_plant_ratio >= 0.14
+            and central_row_coverage >= 0.48
+            and central_dark_ratio >= 0.012
         )
         valid = (
-            (plant_ratio >= 0.07)
-            and central_plant_ratio >= 0.06
-            and green_ratio >= 0.01
+            (
+                (plant_ratio >= 0.07)
+                and central_plant_ratio >= 0.06
+                and green_ratio >= 0.01
+            )
+            or diseased_stem_candidate
             and (paper_ratio <= 0.78)
             and (gray_std >= 16 or edge_energy >= 12)
             and (not document_like)
@@ -198,6 +213,9 @@ def validate_dragonfruit_stem_image(image_path):
             "document_like": bool(document_like),
             "plant_ratio": plant_ratio,
             "central_plant_ratio": central_plant_ratio,
+            "central_row_coverage": central_row_coverage,
+            "central_dark_ratio": central_dark_ratio,
+            "diseased_stem_candidate": bool(diseased_stem_candidate),
             "paper_ratio": paper_ratio,
             "green_ratio": green_ratio,
             "brown_ratio": brown_ratio,

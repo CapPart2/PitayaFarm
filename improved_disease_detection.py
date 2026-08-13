@@ -208,8 +208,21 @@ class ImprovedDiseaseDetection:
             plant_ratio = float(np.mean(green_mask | brown_mask))
             center_y0, center_y1 = img_array.shape[0] // 6, (img_array.shape[0] * 5) // 6
             center_x0, center_x1 = img_array.shape[1] // 6, (img_array.shape[1] * 5) // 6
-            central_plant_ratio = float(
-                np.mean((green_mask | brown_mask)[center_y0:center_y1, center_x0:center_x1])
+            central_mask = (green_mask | brown_mask)[center_y0:center_y1, center_x0:center_x1]
+            central_plant_ratio = float(np.mean(central_mask))
+            central_row_coverage = float(
+                np.mean(np.mean(central_mask, axis=1) >= 0.10)
+            )
+            central_dark_ratio = float(np.mean(v[center_y0:center_y1, center_x0:center_x1] <= 100))
+            # Permit a close-up of a severely damaged yellow/brown stem even
+            # when it has no visible healthy-green edge. The centred, tall,
+            # dark-lesion requirement keeps a person, shirt, or background
+            # image from becoming a disease-model input.
+            diseased_stem_candidate = (
+                plant_ratio >= 0.06
+                and central_plant_ratio >= 0.14
+                and central_row_coverage >= 0.48
+                and central_dark_ratio >= 0.012
             )
             mean_saturation = float(np.mean(s))
 
@@ -236,7 +249,7 @@ class ImprovedDiseaseDetection:
             # class), require visible cactus-green tissue before it may assign
             # a disease. A close stem image can still include its brown/yellow
             # lesion; it just must show some healthy stem context as well.
-            is_target = (
+            normal_stem_candidate = (
                 not document_like
                 and organic_ratio >= 0.18
                 # A phone camera can frame a diseased section closely, leaving
@@ -248,6 +261,12 @@ class ImprovedDiseaseDetection:
                 and paper_like_ratio <= 0.68
                 and (texture_score >= 18.0 or mean_saturation >= 45.0)
             )
+            is_target = (
+                not document_like
+                and organic_ratio >= 0.18
+                and paper_like_ratio <= 0.68
+                and (normal_stem_candidate or diseased_stem_candidate)
+            )
 
             return {
                 "is_target": bool(is_target),
@@ -255,6 +274,9 @@ class ImprovedDiseaseDetection:
                 "brown_ratio": brown_ratio,
                 "plant_ratio": plant_ratio,
                 "central_plant_ratio": central_plant_ratio,
+                "central_row_coverage": central_row_coverage,
+                "central_dark_ratio": central_dark_ratio,
+                "diseased_stem_candidate": bool(diseased_stem_candidate),
                 "organic_ratio": organic_ratio,
                 "paper_like_ratio": paper_like_ratio,
                 "mean_saturation": mean_saturation,
