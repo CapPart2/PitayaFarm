@@ -3047,7 +3047,12 @@ def yield_image_detect():
         is_live_capture = detection_mode == "live"
         conf = mature_confidence_threshold(
             request.form.get("conf"),
-            minimum=0.60 if is_live_capture else MIN_MATURE_CONFIDENCE,
+            # A phone display, glare, and camera autofocus make a genuine
+            # fruit less confident in live capture than in a still photo.
+            # The mature-colour, fruit-shape, plant-context and two-frame
+            # gates below keep this lower model threshold from counting a
+            # person, unrelated object, or plain background.
+            minimum=0.40 if is_live_capture else MIN_MATURE_CONFIDENCE,
         )
         method = (request.form.get("method") or "yolo").lower()
         if method != "yolo":

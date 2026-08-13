@@ -270,7 +270,7 @@ export default function YieldPrediction() {
           if (!blob) return
 
           const file = new File([blob], 'live_frame.jpg', { type: 'image/jpeg' })
-          const resp = await uploadYieldImage(file, 0.60, 'live')
+          const resp = await uploadYieldImage(file, 0.40, 'live')
           if (!resp || !resp.success) return
 
           const detections = Array.isArray(resp.data?.detections) ? resp.data.detections : []
