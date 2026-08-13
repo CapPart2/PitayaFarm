@@ -188,14 +188,13 @@ export async function saveYieldToChart(matureFruits, location = 'Field', season 
 }
 
 // Upload an image for yield detection (returns detections and annotated image)
-export async function uploadYieldImage(file, conf = 0.25) {
+export async function uploadYieldImage(file, conf = 0.55) {
   try {
     const form = new FormData();
     form.append('image', file);
     form.append('conf', String(conf));
-    // Use the trained detector plus the strict, fruit-shaped colour fallback.
-    // This handles fruit partly covered by cactus arms without counting soil.
-    form.append('method', 'hybrid');
+    // Only the trained mature-dragon-fruit class is allowed to create a count.
+    form.append('method', 'yolo');
 
     const response = await fetch(`${API_BASE}/yield-detect`, {
       method: 'POST',
@@ -217,12 +216,12 @@ export async function uploadYieldImage(file, conf = 0.25) {
 }
 
 // Upload a video for yield detection (counts mature fruits in the whole video)
-export async function uploadYieldVideo(videoFile, conf = 0.25) {
+export async function uploadYieldVideo(videoFile, conf = 0.55) {
   try {
     const form = new FormData();
     form.append('video', videoFile);
     form.append('conf', String(conf));
-    form.append('method', 'color');
+    form.append('method', 'yolo');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
@@ -244,7 +243,7 @@ export async function uploadYieldVideo(videoFile, conf = 0.25) {
 }
 
 // Run yield detection on a live stream URL (e.g., Android IP camera)
-export async function detectYieldFromStream(streamUrl, conf = 0.25) {
+export async function detectYieldFromStream(streamUrl, conf = 0.55) {
   try {
     const form = new FormData();
     form.append('stream_url', streamUrl);
