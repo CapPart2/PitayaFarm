@@ -206,6 +206,11 @@ class ImprovedDiseaseDetection:
             organic_ratio = float(np.mean(organic_mask))
             paper_like_ratio = float(np.mean(paper_like_mask))
             plant_ratio = float(np.mean(green_mask | brown_mask))
+            center_y0, center_y1 = img_array.shape[0] // 6, (img_array.shape[0] * 5) // 6
+            center_x0, center_x1 = img_array.shape[1] // 6, (img_array.shape[1] * 5) // 6
+            central_plant_ratio = float(
+                np.mean((green_mask | brown_mask)[center_y0:center_y1, center_x0:center_x1])
+            )
             mean_saturation = float(np.mean(s))
 
             gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
@@ -234,8 +239,12 @@ class ImprovedDiseaseDetection:
             is_target = (
                 not document_like
                 and organic_ratio >= 0.18
-                and plant_ratio >= 0.12
-                and green_ratio >= 0.03
+                # A phone camera can frame a diseased section closely, leaving
+                # only a slim healthy-green edge. Require stem-colour tissue
+                # in the centre, but do not reject that legitimate close-up.
+                and plant_ratio >= 0.07
+                and central_plant_ratio >= 0.06
+                and green_ratio >= 0.01
                 and paper_like_ratio <= 0.68
                 and (texture_score >= 18.0 or mean_saturation >= 45.0)
             )
@@ -245,6 +254,7 @@ class ImprovedDiseaseDetection:
                 "green_ratio": green_ratio,
                 "brown_ratio": brown_ratio,
                 "plant_ratio": plant_ratio,
+                "central_plant_ratio": central_plant_ratio,
                 "organic_ratio": organic_ratio,
                 "paper_like_ratio": paper_like_ratio,
                 "mean_saturation": mean_saturation,
@@ -302,7 +312,9 @@ class ImprovedDiseaseDetection:
             for index in range(1, component_count):
                 x, y, component_width, component_height, area = stats[index]
                 area_ratio = float(area) / image_area
-                if area_ratio < 0.035:
+                # Camera captures can contain a narrow vertical/diagonal stem
+                # rather than a large full-frame cactus paddle.
+                if area_ratio < 0.018:
                     continue
 
                 cx, cy = centroids[index]
@@ -337,7 +349,7 @@ class ImprovedDiseaseDetection:
             ) = best
             # A stem should be reasonably centred; otherwise this is likely a
             # background plant rather than the intended subject.
-            if centre_distance > 0.34:
+            if centre_distance > 0.42:
                 return None, {
                     "is_stem": False,
                     "reason": "stem_not_centered",

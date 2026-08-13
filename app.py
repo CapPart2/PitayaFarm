@@ -174,9 +174,20 @@ def validate_dragonfruit_stem_image(image_path):
         # cannot safely decide that those subjects are a diseased stem. Require
         # visible cactus-green tissue in every accepted image and let a close,
         # focused stem photo include the damaged brown/yellow sections.
+        # Camera frames are commonly tighter and darker than uploads. A real
+        # diseased stem can therefore have only a narrow healthy-green edge.
+        # Keep a plant-colour requirement, but make it attainable for a close
+        # stem capture; the deeper centred-stem extractor performs the final
+        # background rejection before the disease model is called.
+        center_y0, center_y1 = arr.shape[0] // 6, (arr.shape[0] * 5) // 6
+        center_x0, center_x1 = arr.shape[1] // 6, (arr.shape[1] * 5) // 6
+        central_plant_ratio = float(
+            np.mean(plant_mask[center_y0:center_y1, center_x0:center_x1])
+        )
         valid = (
-            (plant_ratio >= 0.12)
-            and green_ratio >= 0.03
+            (plant_ratio >= 0.07)
+            and central_plant_ratio >= 0.06
+            and green_ratio >= 0.01
             and (paper_ratio <= 0.78)
             and (gray_std >= 16 or edge_energy >= 12)
             and (not document_like)
@@ -186,6 +197,7 @@ def validate_dragonfruit_stem_image(image_path):
             "valid": bool(valid),
             "document_like": bool(document_like),
             "plant_ratio": plant_ratio,
+            "central_plant_ratio": central_plant_ratio,
             "paper_ratio": paper_ratio,
             "green_ratio": green_ratio,
             "brown_ratio": brown_ratio,
