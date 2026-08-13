@@ -270,13 +270,11 @@ export default function YieldPrediction() {
           if (!blob) return
 
           const file = new File([blob], 'live_frame.jpg', { type: 'image/jpeg' })
-          const resp = await uploadYieldImage(file, 0.55)
+          const resp = await uploadYieldImage(file, 0.70, 'live')
           if (!resp || !resp.success) return
 
           const detections = Array.isArray(resp.data?.detections) ? resp.data.detections : []
           const validDetections = detections.filter((d) => Array.isArray(d?.box) && d.box.length === 4)
-          setLiveFrameMatureCount(validDetections.length)
-          setLiveDetections(validDetections)
 
           // --- Lightweight tracker to avoid double counting across frames ---
           // Each detection becomes a centroid point; if it matches an existing track (within a distance threshold)
@@ -287,6 +285,7 @@ export default function YieldPrediction() {
           const tracks = liveTracksRef.current
           const usedTrackIds = new Set()
           let newlyCounted = 0
+          const confirmedDetections = []
 
           for (const det of validDetections) {
             const [x1, y1, x2, y2] = det.box
@@ -311,16 +310,23 @@ export default function YieldPrediction() {
               best.cx = cx
               best.cy = cy
               best.lastSeen = now
+              best.hits = (best.hits || 1) + 1
+              if (!best.counted && best.hits >= 3) {
+                best.counted = true
+                newlyCounted += 1
+              }
+              if (best.hits >= 3) confirmedDetections.push(det)
             } else {
               const id = liveNextTrackIdRef.current++
-              tracks.push({ id, cx, cy, lastSeen: now })
+              tracks.push({ id, cx, cy, lastSeen: now, hits: 1, counted: false })
               usedTrackIds.add(id)
-              newlyCounted += 1
             }
           }
 
           // Drop stale tracks (fruit not visible anymore)
           liveTracksRef.current = tracks.filter((t) => now - t.lastSeen <= 2000)
+          setLiveFrameMatureCount(confirmedDetections.length)
+          setLiveDetections(confirmedDetections)
 
           if (newlyCounted > 0) {
             console.log(`🍓 Detected ${newlyCounted} new fruits! Total now:`, liveSessionTotal + newlyCounted)
