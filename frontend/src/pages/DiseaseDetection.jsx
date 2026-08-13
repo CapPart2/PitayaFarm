@@ -154,21 +154,9 @@ export default function DiseaseDetection() {
           parseFloat(b.confidence_level) - parseFloat(a.confidence_level)
         )
         
-        // Get the highest confidence
-        const highestConfidence = parseFloat(sortedDiseases[0].confidence_level)
-        
-        let diseasesToSave = []
-        
-        // Apply confidence-based saving rules
-        if (highestConfidence >= 85) {
-          // Save only the highest confidence disease
-          diseasesToSave = [sortedDiseases[0]]
-          console.log(`🎯 High confidence ({highestConfidence.toFixed(1)}%): Saving only top disease`)
-        } else {
-          // Save top 2 diseases
-          diseasesToSave = sortedDiseases.slice(0, 2)
-          console.log(`📊 Low confidence ({highestConfidence.toFixed(1)}%): Saving top 2 diseases`)
-        }
+        // Save every valid model result. All entries share one session ID, so
+        // Reports combines them into a single result row with all diseases.
+        const diseasesToSave = sortedDiseases
         
         // Save the selected diseases with image and session ID
         const savePromises = diseasesToSave.map(disease => {
