@@ -320,7 +320,12 @@ def has_dragonfruit_bracts(frame_bgr, box) -> bool:
     hsv = cv2.cvtColor(interior, cv2.COLOR_BGR2HSV)
     green = cv2.inRange(hsv, np.array([28, 65, 45]), np.array([95, 255, 255]))
     green_ratio = cv2.countNonZero(green) / float(interior.shape[0] * interior.shape[1])
-    return 0.003 <= green_ratio <= 0.08
+    # A close camera view can include several bracts in the fruit box.  The
+    # previous 8% upper bound rejected those valid close-ups, which is exactly
+    # the framing used by Live Capture.  A red non-fruit object still has to
+    # pass the model class, ripe-colour and compact-shape checks before this
+    # signal is considered.
+    return 0.003 <= green_ratio <= 0.25
 
 
 def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> bool:
@@ -354,6 +359,23 @@ def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> 
         return False
 
     if has_pitaya_fruit_context(frame_bgr, x1, y1, width, height):
+        return True
+
+    # In live capture the fruit is commonly held close to the camera.  There
+    # may be no surrounding cactus left in the frame, even though its green
+    # bracts are visible inside the fruit box.  Treat that as valid plant
+    # evidence rather than rejecting every close-up.  Requiring a sizeable
+    # ripe core and a box that occupies a meaningful part of the frame keeps
+    # this exception narrow and prevents arbitrary small red regions from
+    # becoming fruit detections.
+    frame_area = float(frame_bgr.shape[0] * frame_bgr.shape[1])
+    box_area = float(width * height)
+    if (
+        frame_area > 0
+        and box_area / frame_area >= 0.025
+        and mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.12
+        and has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2))
+    ):
         return True
 
     # A close-up may crop out the surrounding cactus tissue.  Do not lose a
@@ -418,10 +440,17 @@ def is_hsv_fruit_candidate(
         if frame_bgr is not None
         else 0.0
     )
-    if frame_bgr is not None and not has_pitaya_fruit_context(
-        frame_bgr, x, y, width, height
-    ):
-        return False
+    if frame_bgr is not None:
+        has_internal_bracts = has_dragonfruit_bracts(
+            frame_bgr, (x, y, x + width, y + height)
+        )
+        # Green surrounding vegetation alone is too easy to satisfy in a
+        # farm scene: a red tool, flower, or shirt can be beside a plant.
+        # A mature pitaya has distinctive green bracts in the fruit body, so
+        # make that evidence mandatory. It also lets a true close-up pass when
+        # the surrounding stem is cropped out of a live camera frame.
+        if not has_internal_bracts:
+            return False
     standard_shape = (
         extent >= 0.32
         and circularity >= 0.16
@@ -580,6 +609,19 @@ def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
         for core_box in detect_occluded_mature_core_boxes(frame_bgr, rejected_regions):
             if any(box_iou(core_box, existing_box) >= 0.30 for existing_box in mature_boxes):
                 continue
+            x1, y1, x2, y2 = map(int, core_box)
+            width, height = x2 - x1, y2 - y1
+            # Recovery proposals used to bypass the mature-fruit validation
+            # entirely. That let any small red region inside a rejected large
+            # contour become a new count. Apply the same ripe-core and bract
+            # evidence required by the primary detector.
+            if (
+                width <= 0
+                or height <= 0
+                or mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.14
+                or not has_dragonfruit_bracts(frame_bgr, core_box)
+            ):
+                continue
             mature_boxes.append(core_box)
 
         mature_boxes = suppress_overlapping_boxes(mature_boxes, iou_threshold=0.30)
@@ -605,10 +647,6 @@ def detect_focused_mature_fruits(frame_bgr, image_mode: bool = True):
     background are not emitted as mature-fruit boxes.
     """
     if frame_bgr is None or frame_bgr.size == 0:
-        return []
-
-    scene = validate_dragonfruit_maturity_scene(frame_bgr)
-    if not scene.get("valid", False):
         return []
 
     _, boxes, _ = detect_mature_fruits_hsv(frame_bgr, image_mode=image_mode)
@@ -878,7 +916,7 @@ def is_video_mature_fruit(frame_bgr, box) -> bool:
 
 
 def count_mature_in_video(
-    model, source, conf: float = 0.25, max_frames: int = 0, method: str = "hybrid"
+    model, source, conf: float = 0.25, max_frames: int = 0, method: str = "color"
 ) -> dict:
     """Count unique mature fruits in a video/IP-camera stream.
 
@@ -895,7 +933,7 @@ def count_mature_in_video(
     # uploads. The custom YOLO file is retained only as a fallback because it
     # can occasionally predict a box around an entire plant rather than each
     # fruit.
-    if method in {"color", "hybrid"}:
+    if method == "color":
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {source}")
@@ -973,6 +1011,7 @@ def count_mature_in_video(
     mature_class_ids = get_mature_class_ids(model)
 
     unique_ids = set()
+    track_hits = {}
     frame_count = 0
 
     try:
@@ -1017,7 +1056,14 @@ def count_mature_in_video(
                         frame_bgr, xyxys[index], box_conf
                     ):
                         continue
-                unique_ids.add(int(track_id))
+                track_id = int(track_id)
+                track_hits[track_id] = track_hits.get(track_id, 0) + 1
+                # A tracked class prediction must survive several frames
+                # before it changes the uploaded-video total.  This removes
+                # one-frame false positives without making a stable mature
+                # fruit invisible to the user.
+                if track_hits[track_id] >= 3:
+                    unique_ids.add(track_id)
 
     return {
         "total_mature_fruits": len(unique_ids),
@@ -1105,10 +1151,13 @@ def is_annotated_yield_video(source, sample_frames: int = 5) -> bool:
 
 
 def annotate_video_and_count(
-    model, source, output_path: str, conf: float = 0.4, method: str = "hybrid"
+    model, source, output_path: str, conf: float = 0.4, method: str = "color"
 ) -> dict:
-    """Process each frame with individual fruit-region detection (``hybrid``),
-    or YOLO tracking when explicitly requested.
+    """Process a video with the strict mature-fruit region detector by default.
+
+    It verifies ripe colour, compact fruit shape, surrounding pitaya tissue,
+    and green fruit bracts.  The available YOLO weights are retained as an
+    optional mode only because they can return one box around an entire plant.
     Writes an annotated video file and returns a running unique fruit count.
     """
     mature_class_ids = get_mature_class_ids(model) if model is not None else set()
@@ -1133,7 +1182,7 @@ def annotate_video_and_count(
         cap.release()
 
     # ── HSV color mode (same as image capture) ──────────────────────────────
-    if method in {"color", "hybrid"}:
+    if method == "color":
         cap = cv2.VideoCapture(source)
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {source}")
@@ -1397,6 +1446,9 @@ def annotate_video_and_count(
         }
 
     # ── YOLO tracking mode ───────────────────────────────────────────────────
+    # Do not count a one-frame tracker flicker.  A mature fruit must remain
+    # classified as the trained mature-fruit class across three frames.
+    track_hits = {}
     try:
         results_iter = model.track(
             source=source,
@@ -1482,7 +1534,10 @@ def annotate_video_and_count(
                 # Always draw detection boxes in blue for consistency
                 color = (255, 0, 0)
                 if is_mature and track_id is not None:
-                    unique_ids.add(int(track_id))
+                    track_id = int(track_id)
+                    track_hits[track_id] = track_hits.get(track_id, 0) + 1
+                    if track_hits[track_id] >= 3:
+                        unique_ids.add(track_id)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 tid_str = f" id:{int(track_id)}" if track_id is not None else ""
                 # Build label text without the class name to avoid showing 'MATURE'
@@ -3240,10 +3295,9 @@ def yield_image_detect():
         img_path = os.path.join(save_dir, f"{uuid.uuid4().hex}_{filename}")
         img_file.save(img_path)
 
-        # Individual mature fruits are identified from ripe colour, compact
-        # fruit shape, and nearby pitaya tissue.  This avoids a known issue in
-        # the available YOLO weights, which can draw one box around a whole
-        # plant instead of around each fruit.
+        # The strict fruit-region detector checks ripe colour, compact shape,
+        # plant context and fruit bracts.  This avoids whole-plant boxes from
+        # the available YOLO weights and rejects unrelated pink/red objects.
         detection_mode = (request.form.get("detection_mode") or "photo").lower()
         is_live_capture = detection_mode == "live"
         conf = mature_confidence_threshold(
@@ -3255,12 +3309,16 @@ def yield_image_detect():
             # person, unrelated object, or plain background.
             minimum=0.40 if is_live_capture else MIN_MATURE_CONFIDENCE,
         )
-        method = (request.form.get("method") or "hybrid").lower()
+        method = (request.form.get("method") or "color").lower()
         if method not in {"hybrid", "color", "yolo"}:
             return jsonify({
                 "success": False,
                 "error": "Unsupported mature-fruit detection method.",
             }), 400
+        # Older clients sent "hybrid". Keep that request format compatible
+        # while routing it to the current strict fruit-region detector.
+        if method == "hybrid":
+            method = "color"
         frame_bgr = cv2.imread(img_path)
         if frame_bgr is None:
             return jsonify({"success": False, "error": "Failed to read saved image"}), 400
@@ -3271,7 +3329,7 @@ def yield_image_detect():
         scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
 
         detections = []
-        if method in {"hybrid", "color"}:
+        if method == "color":
             detections = detect_focused_mature_fruits(frame_bgr, image_mode=True)
         else:
             model = None
@@ -3424,12 +3482,14 @@ def yield_video_detect():
 
         annotated_rel = None
         stats = None
-        method = (request.form.get("method") or "hybrid").lower()
+        method = (request.form.get("method") or "color").lower()
         if method not in {"hybrid", "color", "yolo"}:
             return jsonify({
                 "success": False,
                 "error": "Unsupported mature-fruit detection method.",
             }), 400
+        if method == "hybrid":
+            method = "color"
 
         model = None
         if method == "yolo":
