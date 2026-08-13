@@ -14,7 +14,13 @@ import os
 import cv2
 from ultralytics import YOLO
 
-from dashboard_api import MODEL_PATHS
+from dashboard_api import (
+    MODEL_PATHS,
+    get_mature_class_ids,
+    has_pitaya_fruit_context,
+    is_video_mature_fruit,
+    validate_dragonfruit_maturity_scene,
+)
 
 
 def load_yolo_model():
@@ -27,9 +33,9 @@ def load_yolo_model():
 def main(source):
     model = load_yolo_model()
     names = getattr(model, "names", {}) or {}
-    mature_ids = {i for i, n in names.items() if str(n).strip().lower() == "mature"}
-    if not mature_ids:
-        mature_ids = {0}
+    # Never assume class 0 means mature: in a generic YOLO model it is a
+    # person, so that fallback created false fruit detections.
+    mature_ids = get_mature_class_ids(model)
 
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
@@ -42,8 +48,9 @@ def main(source):
         if not ret:
             break
 
-        results = model.track(frame, conf=0.25, persist=True, verbose=False)
+        results = model.track(frame, conf=0.55, persist=True, verbose=False)
         annotated = frame
+        scene_is_valid = validate_dragonfruit_maturity_scene(frame).get("valid", False)
         for r in results:
             boxes = getattr(r, "boxes", None)
             if boxes is None or len(boxes) == 0:
@@ -52,12 +59,20 @@ def main(source):
             ids = boxes.id.tolist() if getattr(boxes, "id", None) is not None else [None] * len(clss)
             for box, cls_id, track_id in zip(boxes.xyxy.tolist(), clss, ids):
                 x1, y1, x2, y2 = map(int, box)
-                label = str(names.get(int(cls_id), int(cls_id)))
-                color = (0, 255, 0)
-                if int(cls_id) in mature_ids:
-                    color = (255, 0, 0)
-                    if track_id is not None:
-                        total_ids.add(int(track_id))
+                if not (
+                    scene_is_valid
+                    and int(cls_id) in mature_ids
+                    and is_video_mature_fruit(frame, box)
+                    and has_pitaya_fruit_context(frame, x1, y1, x2 - x1, y2 - y1)
+                ):
+                    # Do not draw a box for a rejected object.  It is not a
+                    # mature fruit and must not look like a detection.
+                    continue
+
+                label = "Mature fruit"
+                color = (255, 0, 0)
+                if track_id is not None:
+                    total_ids.add(int(track_id))
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 cv2.putText(
                     annotated,

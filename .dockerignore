@@ -12,4 +12,14 @@ frontend/android
 Mature Dragon Fruit
 oversample
 Yield_detection/runs
+!Yield_detection/
+!Yield_detection/runs/
+Yield_detection/runs/*
+!Yield_detection/runs/detect/
+Yield_detection/runs/detect/*
+!Yield_detection/runs/detect/dragonfruit_maturity5/
+Yield_detection/runs/detect/dragonfruit_maturity5/*
+!Yield_detection/runs/detect/dragonfruit_maturity5/weights/
+Yield_detection/runs/detect/dragonfruit_maturity5/weights/*
+!Yield_detection/runs/detect/dragonfruit_maturity5/weights/best.pt
 *.ipynb

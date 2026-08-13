@@ -270,7 +270,7 @@ export default function YieldPrediction() {
           if (!blob) return
 
           const file = new File([blob], 'live_frame.jpg', { type: 'image/jpeg' })
-          const resp = await uploadYieldImage(file, 0.70, 'live')
+          const resp = await uploadYieldImage(file, 0.60, 'live')
           if (!resp || !resp.success) return
 
           const detections = Array.isArray(resp.data?.detections) ? resp.data.detections : []
@@ -311,11 +311,11 @@ export default function YieldPrediction() {
               best.cy = cy
               best.lastSeen = now
               best.hits = (best.hits || 1) + 1
-              if (!best.counted && best.hits >= 3) {
+              if (!best.counted && best.hits >= 2) {
                 best.counted = true
                 newlyCounted += 1
               }
-              if (best.hits >= 3) confirmedDetections.push(det)
+              if (best.hits >= 2) confirmedDetections.push(det)
             } else {
               const id = liveNextTrackIdRef.current++
               tracks.push({ id, cx, cy, lastSeen: now, hits: 1, counted: false })

@@ -169,18 +169,14 @@ def validate_dragonfruit_stem_image(image_path):
             or (paper_ratio >= 0.45 and plant_ratio <= 0.05 and edge_energy <= 12)
         )
 
-        # Brown/organic pixels by themselves also occur in skin, furniture,
-        # soil, and patterned fabric. Require visible green cactus tissue
-        # before a disease-only classifier is allowed to choose a label.
+        # Brown/yellow pixels alone also occur in people, furniture, soil, and
+        # patterned fabric. The classifier contains disease labels only, so it
+        # cannot safely decide that those subjects are a diseased stem. Require
+        # visible cactus-green tissue in every accepted image and let a close,
+        # focused stem photo include the damaged brown/yellow sections.
         valid = (
             (plant_ratio >= 0.12)
-            # Accept a close, visibly damaged stem when its yellow/brown
-            # tissue is substantial. The model performs the final diagnosis.
-            and (
-                green_ratio >= 0.03
-                or brown_ratio >= 0.08
-                or yellow_ratio >= 0.07
-            )
+            and green_ratio >= 0.03
             and (paper_ratio <= 0.78)
             and (gray_std >= 16 or edge_energy >= 12)
             and (not document_like)
@@ -334,7 +330,7 @@ def predict():
                         "disease_name": None,
                         "confidence_level": 0,
                         "severity": "none",
-                        "message": "No disease detection found. Please capture a clear dragon fruit stem image.",
+                        "message": "No disease detection found.",
                         "reason": "invalid_subject",
                     },
                     "prediction_details": {
@@ -359,7 +355,7 @@ def predict():
                 detection["confidence_level"] = 0
                 detection["severity"] = "none"
                 detection["message"] = (
-                    "No disease detection found. Please capture a clear dragon fruit stem image."
+                    "No disease detection found."
                 )
                 return jsonify(
                     {

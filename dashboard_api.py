@@ -38,9 +38,48 @@ import subprocess
 MODEL = None
 MODEL_PATHS = [
     "Yield_detection/runs/detect/dragonfruit_maturity5/weights/best.pt",
-    "Yield_detection/runs/detect/dragonfruit_maturity5/weights/last.pt",
-    "Yield_detection/yolov8n.pt",
 ]
+MATURE_CLASS_LABELS = {"mature", "fully_red_dragon_fruit"}
+NO_MATURE_DETECTION_MESSAGE = "No mature detection found."
+# A one-class detector must be conservative: it has no explicit "person" or
+# "background" label to correct a low-confidence guess.  Do not permit clients
+# to lower this threshold for records that may be saved as yield data.
+MIN_MATURE_CONFIDENCE = 0.55
+
+
+def mature_confidence_threshold(
+    value, default: float = MIN_MATURE_CONFIDENCE, minimum: float = MIN_MATURE_CONFIDENCE
+) -> float:
+    """Return a safe mature-fruit confidence threshold from a request value."""
+    try:
+        requested = float(value)
+    except (TypeError, ValueError):
+        requested = default
+    return min(0.99, max(minimum, requested))
+
+
+def get_mature_class_ids(model):
+    """Return the trained mature-fruit class IDs, never a generic fallback.
+
+    A generic COCO model labels class 0 as ``person``. Treating its class 0 as
+    mature fruit was the source of false counts after deployments where the
+    custom weight file was absent. A model without our explicit fruit label is
+    invalid for yield assessment and must produce no detections.
+    """
+    names = getattr(model, "names", {}) or {}
+    name_items = tuple(names.items() if isinstance(names, dict) else enumerate(names))
+    mature_ids = {
+        int(class_id)
+        for class_id, class_name in name_items
+        if str(class_name).strip().lower() in MATURE_CLASS_LABELS
+    }
+    if not mature_ids:
+        available_labels = ", ".join(str(name) for _, name in name_items)
+        raise RuntimeError(
+            "Configured yield model is not a PITAYA mature-fruit model. "
+            f"Expected one of {sorted(MATURE_CLASS_LABELS)}; found: {available_labels or 'no labels'}"
+        )
+    return mature_ids
 
 
 def get_request_user_id(default=None):
@@ -119,6 +158,9 @@ def load_yolo_model():
         raise FileNotFoundError("No YOLO weights found in expected locations")
 
     MODEL = YOLO(weight)
+    # Validate immediately so a wrong or generic model can never start serving
+    # fruit detections after a redeploy.
+    get_mature_class_ids(MODEL)
     return MODEL
 
 
@@ -179,6 +221,89 @@ def validate_dragonfruit_maturity_scene(frame_bgr) -> dict:
     }
 
 
+def has_pitaya_fruit_context(frame_bgr, x: int, y: int, width: int, height: int) -> bool:
+    """Require cactus tissue immediately around a proposed mature fruit.
+
+    A global green-background check alone can still accept a red shirt or an
+    object in a field. Mature pitaya fruits normally show green bracts/stem in
+    the area around the red body, so require a small amount of that local
+    context before exposing a mature detection.
+    """
+    if frame_bgr is None or frame_bgr.size == 0 or width <= 0 or height <= 0:
+        return False
+
+    frame_height, frame_width = frame_bgr.shape[:2]
+    padding = max(8, int(round(max(width, height) * 0.30)))
+    left, top = max(0, x - padding), max(0, y - padding)
+    right, bottom = min(frame_width, x + width + padding), min(frame_height, y + height + padding)
+    roi = frame_bgr[top:bottom, left:right]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, np.array([25, 65, 45]), np.array([95, 255, 255]))
+
+    # Exclude the fruit body itself: the green evidence must be adjacent plant
+    # tissue, not a green patch inside an unrelated object.
+    fruit_left, fruit_top = x - left, y - top
+    fruit_right, fruit_bottom = fruit_left + width, fruit_top + height
+    green[fruit_top:fruit_bottom, fruit_left:fruit_right] = 0
+    surrounding_area = max(1, (right - left) * (bottom - top) - (width * height))
+    return cv2.countNonZero(green) / float(surrounding_area) >= 0.012
+
+
+def has_dragonfruit_bracts(frame_bgr, box) -> bool:
+    """Check for green scale tips inside a close-up mature fruit box.
+
+    This is used for live capture, where a red shirt in front of a plant can
+    otherwise satisfy both a one-class model and the surrounding-green check.
+    A real dragon fruit normally has a small amount of green bract tissue in
+    its bounding box; background vegetation outside the box cannot satisfy it.
+    """
+    x1, y1, x2, y2 = map(int, box)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2 = min(frame_bgr.shape[1], x2)
+    y2 = min(frame_bgr.shape[0], y2)
+    if x2 <= x1 or y2 <= y1:
+        return False
+
+    roi = frame_bgr[y1:y2, x1:x2]
+    height, width = roi.shape[:2]
+    inset_x, inset_y = max(1, int(width * 0.08)), max(1, int(height * 0.08))
+    interior = roi[inset_y : height - inset_y, inset_x : width - inset_x]
+    if interior.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(interior, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, np.array([28, 65, 45]), np.array([95, 255, 255]))
+    green_ratio = cv2.countNonZero(green) / float(interior.shape[0] * interior.shape[1])
+    return 0.003 <= green_ratio <= 0.08
+
+
+def is_live_mature_dragonfruit(frame_bgr, box) -> bool:
+    """Accept a real mature fruit in live video while rejecting lookalikes.
+
+    Live frames often contain motion blur, shadows, or cactus arms that hide
+    the green bracts.  Require a mature red/pink fruit core and nearby pitaya
+    plant tissue, but do not require bracts to be visible *inside* every box.
+    The caller also confirms the candidate across multiple frames.
+    """
+    if not is_video_mature_fruit(frame_bgr, box):
+        return False
+
+    x1, y1, x2, y2 = map(int, box)
+    width, height = x2 - x1, y2 - y1
+    if width <= 0 or height <= 0:
+        return False
+
+    # A fruit is compact/oval. This rejects a broad clothing or torso box,
+    # even if it is recorded in front of vegetation.
+    aspect_ratio = width / float(height)
+    return 0.45 <= aspect_ratio <= 1.90 and has_pitaya_fruit_context(
+        frame_bgr, x1, y1, width, height
+    )
+
+
 def is_hsv_fruit_candidate(
     contour, pink_mask, frame_shape, image_mode: bool = False, frame_bgr=None
 ) -> bool:
@@ -224,6 +349,10 @@ def is_hsv_fruit_candidate(
         if frame_bgr is not None
         else 0.0
     )
+    if frame_bgr is not None and not has_pitaya_fruit_context(
+        frame_bgr, x, y, width, height
+    ):
+        return False
     standard_shape = (
         extent >= 0.32
         and circularity >= 0.16
@@ -623,12 +752,7 @@ def count_mature_in_video(
         Dictionary with total unique mature fruits and metadata.
     """
     # Determine which class IDs correspond to "mature" in the model's names mapping
-    names = getattr(model, "names", {}) or {}
-    mature_class_ids = {
-        i for i, n in names.items() if str(n).strip().lower() == "mature"
-    }
-    if not mature_class_ids:
-        mature_class_ids = {0}
+    mature_class_ids = get_mature_class_ids(model)
 
     unique_ids = set()
     frame_count = 0
@@ -665,12 +789,26 @@ def count_mature_in_video(
         )
         frame_bgr = r.orig_img if getattr(r, "orig_img", None) is not None else None
 
+        # A mature-only model has no reliable "background" result.  Never let
+        # a person, object, or another crop be counted simply because it was
+        # assigned the mature class; the frame must also contain pitaya plant
+        # tissue.
+        if not validate_dragonfruit_maturity_scene(frame_bgr).get("valid", False):
+            continue
+
         for index, (cls_id, track_id) in enumerate(zip(clss, ids)):
             if track_id is None:
                 continue
             if int(cls_id) in mature_class_ids:
                 if frame_bgr is not None and index < len(xyxys):
-                    if not is_video_mature_fruit(frame_bgr, xyxys[index]):
+                    # This helper is used for a live stream, so apply the
+                    # stricter live-camera validator before adding a count.
+                    if not is_live_mature_dragonfruit(frame_bgr, xyxys[index]):
+                        continue
+                    x1, y1, x2, y2 = map(int, xyxys[index])
+                    if not has_pitaya_fruit_context(
+                        frame_bgr, x1, y1, x2 - x1, y2 - y1
+                    ):
                         continue
                 unique_ids.add(int(track_id))
 
@@ -766,12 +904,7 @@ def annotate_video_and_count(
     OR with YOLO tracking (method='yolo').
     Writes an annotated video file and returns a running unique fruit count.
     """
-    names = getattr(model, "names", {}) or {}
-    mature_class_ids = {
-        i for i, n in names.items() if str(n).strip().lower() == "mature"
-    }
-    if not mature_class_ids:
-        mature_class_ids = {0}
+    mature_class_ids = get_mature_class_ids(model)
 
     unique_ids = set()
     frame_count = 0
@@ -845,7 +978,19 @@ def annotate_video_and_count(
                         print(f"Failed to initialize codec {codec_name}: {e}")
                         continue
 
-            annotated, mature_boxes, _ = detect_mature_fruits_hsv(frame)
+            scene_validation = validate_dragonfruit_maturity_scene(frame)
+            if scene_validation.get("valid", False):
+                # Start from the original frame so rejected colour regions do
+                # not leave a detection box in the exported video.
+                _, mature_boxes, _ = detect_mature_fruits_hsv(frame)
+                annotated = frame.copy()
+            else:
+                # Do not carry a box from a previous plant frame onto a person
+                # or background frame.  The total is preserved, but this frame
+                # has no detection.
+                mature_boxes = []
+                active_tracks = []
+                annotated = frame.copy()
 
             mature_boxes = [
                 (x, y, w_fruit, h_fruit)
@@ -1105,8 +1250,9 @@ def annotate_video_and_count(
 
         frame_area = (frame_size[0] * frame_size[1]) if frame_size else 1
         annotated = orig.copy()
+        scene_validation = validate_dragonfruit_maturity_scene(orig)
         boxes = getattr(r, "boxes", None)
-        if boxes is not None and len(boxes) > 0:
+        if scene_validation.get("valid", False) and boxes is not None and len(boxes) > 0:
             xyxys = boxes.xyxy.tolist()
             confs_list = boxes.conf.tolist()
             clss = boxes.cls.tolist()
@@ -1116,6 +1262,11 @@ def annotate_video_and_count(
                 else [None] * len(clss)
             )
             for xyxy, box_conf, cls_id, track_id in zip(xyxys, confs_list, clss, ids):
+                # Do not draw, count, or expose detections from any other
+                # model class. This includes people/background classes if a
+                # generic model is ever configured by mistake.
+                if int(cls_id) not in mature_class_ids:
+                    continue
                 x1, y1, x2, y2 = map(int, xyxy)
                 box_w = x2 - x1
                 box_h = y2 - y1
@@ -1125,7 +1276,9 @@ def annotate_video_and_count(
                     continue
                 if not is_video_mature_fruit(orig, (x1, y1, x2, y2)):
                     continue
-                is_mature = int(cls_id) in mature_class_ids
+                if not has_pitaya_fruit_context(orig, x1, y1, x2 - x1, y2 - y1):
+                    continue
+                is_mature = True
                 # Always draw detection boxes in blue for consistency
                 color = (255, 0, 0)
                 if is_mature and track_id is not None:
@@ -2887,9 +3040,21 @@ def yield_image_detect():
         img_path = os.path.join(save_dir, f"{uuid.uuid4().hex}_{filename}")
         img_file.save(img_path)
 
-        # optional confidence threshold
-        conf = float(request.form.get("conf", 0.25))
+        # Use the trained model only.  The old HSV/hybrid modes treated any
+        # sufficiently pink/red object as fruit, which is why clothing and
+        # unrelated objects could appear as mature detections.
+        detection_mode = (request.form.get("detection_mode") or "photo").lower()
+        is_live_capture = detection_mode == "live"
+        conf = mature_confidence_threshold(
+            request.form.get("conf"),
+            minimum=0.60 if is_live_capture else MIN_MATURE_CONFIDENCE,
+        )
         method = (request.form.get("method") or "yolo").lower()
+        if method != "yolo":
+            return jsonify({
+                "success": False,
+                "error": "Only the trained mature-fruit detector is available.",
+            }), 400
         frame_bgr = cv2.imread(img_path)
         if frame_bgr is None:
             return jsonify({"success": False, "error": "Failed to read saved image"}), 400
@@ -2907,68 +3072,8 @@ def yield_image_detect():
                         "detections": [],
                         "annotated_image": f"data:image/jpeg;base64,{encoded_b64}",
                         "source_path": img_path,
-                        "message": "No mature detection found. Please capture mature dragon fruit with its stem visible.",
+                        "message": NO_MATURE_DETECTION_MESSAGE,
                         "reason": scene_validation["reason"],
-                        "scene_validation": scene_validation,
-                    },
-                }
-            )
-
-        # If caller requests classic color-based detection, run it and return
-        if method == "color":
-            # Use classical color-based HSV detection (user-provided algorithm)
-            img_bgr = frame_bgr
-
-            # Use exactly the same still-photo HSV path as hybrid mode. Keeping two
-            # copies of the colour logic caused the colour-only endpoint to miss a
-            # different set of partly occluded mature fruits.
-            _, mature_fruits, _ = detect_mature_fruits_hsv(img_bgr, image_mode=True)
-
-            # Draw boxes on BGR image
-            annotated_bgr = img_bgr.copy()
-            detections = []
-            for x, y, w_fruit, h_fruit in mature_fruits:
-                # Draw mature fruits in blue, but do not render the 'MATURE' text on the image
-                cv2.rectangle(
-                    annotated_bgr, (x, y), (x + w_fruit, y + h_fruit), (255, 0, 0), 3
-                )
-                detections.append(
-                    {
-                        "box": [
-                            float(x),
-                            float(y),
-                            float(x + w_fruit),
-                            float(y + h_fruit),
-                        ],
-                        "confidence": 0.99,
-                        "label": "MATURE",
-                    }
-                )
-
-            detections = suppress_overlapping_detections(detections)
-
-            success, encoded_img = cv2.imencode(".jpg", annotated_bgr)
-            if not success:
-                return (
-                    jsonify(
-                        {"success": False, "error": "Failed to encode annotated image"}
-                    ),
-                    500,
-                )
-            encoded_b64 = base64.b64encode(encoded_img.tobytes()).decode("ascii")
-
-            return jsonify(
-                {
-                    "success": True,
-                    "data": {
-                        "detections": detections,
-                        "annotated_image": f"data:image/jpeg;base64,{encoded_b64}",
-                        "source_path": img_path,
-                        "message": (
-                            None
-                            if detections
-                            else "No mature detection found. No mature dragon fruit was identified."
-                        ),
                         "scene_validation": scene_validation,
                     },
                 }
@@ -2977,31 +3082,18 @@ def yield_image_detect():
         detections = []
         model = None
         results = []
-        model_error = None
-
-        # Hybrid mode must still return the carefully filtered HSV result if the
-        # optional model cannot be loaded or make a prediction. Previously, a model
-        # runtime error aborted the whole image request before the fallback ran.
         try:
             model = load_yolo_model()
             results = list(
                 model.predict(source=img_path, conf=conf, save=False, verbose=False)
             )
         except Exception as exc:
-            model_error = str(exc)
-            if method != "hybrid":
-                return jsonify({"success": False, "error": model_error}), 500
-            print(f"YOLO image prediction unavailable; using HSV fallback: {model_error}")
+            return jsonify({"success": False, "error": str(exc)}), 500
 
         r = results[0] if results else None
         # r.boxes.xyxy, r.boxes.conf, r.boxes.cls
         boxes = getattr(r, "boxes", None) if r is not None else None
-        names = getattr(model, "names", {}) or {}
-        mature_class_ids = {
-            i for i, n in names.items() if str(n).strip().lower() == "mature"
-        }
-        if not mature_class_ids and names:
-            mature_class_ids = {0}
+        mature_class_ids = get_mature_class_ids(model)
         if r is not None and getattr(r, "orig_img", None) is not None:
             frame_bgr = r.orig_img
 
@@ -3013,35 +3105,22 @@ def yield_image_detect():
             for b, c, cl in zip(xyxy, confs, clss):
                 if mature_class_ids and int(cl) not in mature_class_ids:
                     continue
-                if frame_bgr is not None and not is_fully_mature_fruit(frame_bgr, b):
+                if frame_bgr is not None and not (
+                    is_live_mature_dragonfruit(frame_bgr, b)
+                    if is_live_capture
+                    else is_fully_mature_fruit(frame_bgr, b)
+                ):
+                    continue
+                x1, y1, x2, y2 = map(int, b)
+                if frame_bgr is not None and not has_pitaya_fruit_context(
+                    frame_bgr, x1, y1, x2 - x1, y2 - y1
+                ):
                     continue
                 detections.append(
                     {
                         "box": [float(b[0]), float(b[1]), float(b[2]), float(b[3])],
                         "confidence": float(c),
                         "class_id": int(cl),
-                        "label": "MATURE",
-                    }
-                )
-
-        # Optional fallback for controlled evaluation only. Production image
-        # assessment uses the trained detector to avoid colour-based ground hits.
-        if method == "hybrid" and frame_bgr is not None:
-            _, hsv_boxes, _ = detect_mature_fruits_hsv(frame_bgr, image_mode=True)
-            for x, y, width, height in hsv_boxes:
-                candidate_box = [
-                    float(x),
-                    float(y),
-                    float(x + width),
-                    float(y + height),
-                ]
-                if any(box_iou(candidate_box, item["box"]) >= 0.30 for item in detections):
-                    continue
-                detections.append(
-                    {
-                        "box": candidate_box,
-                        "confidence": 0.80,
-                        "class_id": next(iter(mature_class_ids), 0),
                         "label": "MATURE",
                     }
                 )
@@ -3087,7 +3166,7 @@ def yield_image_detect():
                 "message": (
                     None
                     if detections
-                    else "No mature detection found. No mature dragon fruit was identified."
+                    else NO_MATURE_DETECTION_MESSAGE
                 ),
                 "scene_validation": scene_validation,
             },
@@ -3106,11 +3185,13 @@ def yield_video_detect():
     Request options (multipart/form-data or query/JSON):
       - video: uploaded video file (field name: "video")
       - stream_url: optional URL for IP camera / Android phone stream
-      - conf: optional confidence threshold (default 0.25)
+      - conf: optional confidence threshold (minimum 0.55)
     """
     try:
         # Confidence threshold (form or query param)
-        conf = float(request.form.get("conf", request.args.get("conf", 0.25)))
+        conf = mature_confidence_threshold(
+            request.form.get("conf", request.args.get("conf"))
+        )
 
         stream_url = request.form.get("stream_url") or request.args.get("stream_url")
         video_path = None
@@ -3166,8 +3247,15 @@ def yield_video_detect():
 
         annotated_rel = None
         stats = None
-        # Default to HSV color mode (same algorithm as image capture = most accurate)
-        method = (request.form.get("method") or "color").lower()
+        # Never use HSV colour-only detection for a yield record: a red person,
+        # shirt, flower, or object can match its colour range.  Use only the
+        # model's explicitly named mature-fruit class.
+        method = (request.form.get("method") or "yolo").lower()
+        if method != "yolo":
+            return jsonify({
+                "success": False,
+                "error": "Only the trained mature-fruit detector is available.",
+            }), 400
         if stream_url:
             # For stream URLs, just count without saving annotated video
             stats = count_mature_in_video(model, source=source, conf=conf)
@@ -3210,6 +3298,11 @@ def yield_video_detect():
                     "original_video_url": original_video_url,
                     "annotated_video_url": annotated_video_url,
                     "conf": conf,
+                    "message": (
+                        None
+                        if stats.get("total_mature_fruits", 0) > 0
+                        else NO_MATURE_DETECTION_MESSAGE
+                    ),
                 },
             }
         )

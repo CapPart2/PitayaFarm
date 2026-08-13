@@ -226,15 +226,16 @@ class ImprovedDiseaseDetection:
                 and plant_ratio < 0.10
             )
 
-            # A healthy cactus is green, but a diseased dragon-fruit stem can
-            # be predominantly yellow/brown.  Require substantial plant-colour
-            # tissue and allow damaged tissue to satisfy the colour evidence;
-            # otherwise severe disease photos are rejected before inference.
+            # Brown/yellow subjects include people, soil, wood, and fabric.
+            # Since this classifier has disease classes only (no "other"
+            # class), require visible cactus-green tissue before it may assign
+            # a disease. A close stem image can still include its brown/yellow
+            # lesion; it just must show some healthy stem context as well.
             is_target = (
                 not document_like
                 and organic_ratio >= 0.18
                 and plant_ratio >= 0.12
-                and (green_ratio >= 0.03 or brown_ratio >= 0.08)
+                and green_ratio >= 0.03
                 and paper_like_ratio <= 0.68
                 and (texture_score >= 18.0 or mean_saturation >= 45.0)
             )
@@ -665,7 +666,9 @@ class ImprovedDiseaseDetection:
             if detected_diseases and top_disease_name == "Stem_Canker" and top_confidence < 0.45:
                 detected_diseases = []
 
-            # If no diseases detected, check for healthy leaf
+            # This is a stem-only detector.  It has no background/healthy class,
+            # so every rejected prediction must be exposed as an explicit
+            # no-detection result rather than a guessed "healthy leaf" label.
             if not detected_diseases:
                 if len(sorted_predictions) >= 2:
                     if top_confidence < 0.75 and confidence_gap < 0.15:
@@ -673,7 +676,7 @@ class ImprovedDiseaseDetection:
                             "success": True,
                             "disease_name": None,
                             "confidence": top_confidence,
-                            "message": "No clear disease symptoms detected - appears to be healthy leaf",
+                            "message": "No disease detection found.",
                             "reason": "likely_healthy",
                             "top_prediction": sorted_predictions[0],
                             "second_prediction": sorted_predictions[1],
@@ -685,7 +688,7 @@ class ImprovedDiseaseDetection:
                     "success": True,
                     "disease_name": None,
                     "confidence": top_confidence,
-                    "message": f"Low confidence detection ({top_confidence:.1%}) - may be healthy leaf or unclear symptoms",
+                    "message": "No disease detection found.",
                     "reason": "low_confidence",
                     "predicted_class": sorted_predictions[0][0],
                     "required_confidence": self.confidence_thresholds.get(
@@ -753,7 +756,7 @@ class ImprovedDiseaseDetection:
                     "success": True,
                     "disease_name": None,
                     "confidence": 0,
-                    "message": "No disease detection found. Please keep one dragon fruit stem centred in the image.",
+                    "message": "No disease detection found.",
                     "reason": stem_validation.get("reason", "stem_not_found"),
                     "subject_validation": subject_validation,
                 }
@@ -770,7 +773,7 @@ class ImprovedDiseaseDetection:
                     "success": True,
                     "disease_name": None,
                     "confidence": 0,
-                    "message": f"Image quality too low for accurate detection (Quality: {quality['quality_score']:.2f})",
+                    "message": "No disease detection found.",
                     "reason": "low_image_quality",
                     "quality_details": quality,
                 }
