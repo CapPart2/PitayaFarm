@@ -331,6 +331,167 @@ def has_dragonfruit_bracts(frame_bgr, box) -> bool:
     return 0.003 <= green_ratio <= 0.25
 
 
+def has_attached_pitaya_stem(frame_bgr, box) -> bool:
+    """Require a substantial green cactus arm immediately above a fruit box.
+
+    ``has_pitaya_fruit_context`` is intentionally permissive for photographs:
+    grass beside a fruit is useful context when the branch is partly hidden.
+    It is not strong enough for a moving video, however.  A red/brown patch on
+    the ground also has nearby green grass and could therefore pass that test.
+
+    A fruit that is still attached to a plant has a larger green component that
+    touches its upper area and continues well above it (a cactus arm or its
+    bracts).  Grass normally has many small, disconnected blades and does not
+    satisfy this connected-component geometry.  The function is deliberately
+    used as an extra *video precision* gate, rather than replacing the more
+    forgiving still-image context check.
+    """
+    if frame_bgr is None or frame_bgr.size == 0:
+        return False
+
+    x1, y1, x2, y2 = map(int, box)
+    frame_height, frame_width = frame_bgr.shape[:2]
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(frame_width, x2), min(frame_height, y2)
+    width, height = x2 - x1, y2 - y1
+    if width < 12 or height < 12:
+        return False
+
+    horizontal_padding = max(10, int(round(width * 0.65)))
+    top_padding = max(16, int(round(height * 1.8)))
+    bottom_padding = max(6, int(round(height * 0.20)))
+    left, top = max(0, x1 - horizontal_padding), max(0, y1 - top_padding)
+    right, bottom = min(frame_width, x2 + horizontal_padding), min(
+        frame_height, y2 + bottom_padding
+    )
+    roi = frame_bgr[top:bottom, left:right]
+    if roi.size == 0:
+        return False
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    green = cv2.inRange(hsv, np.array([25, 65, 45]), np.array([95, 255, 255]))
+    green = cv2.morphologyEx(
+        green,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
+    )
+    component_count, _, stats, _ = cv2.connectedComponentsWithStats(
+        green, connectivity=8
+    )
+    if component_count <= 1:
+        return False
+
+    # Candidate coordinates inside the padded ROI.  The upper contact band is
+    # kept narrow so unrelated grass below or beside the candidate cannot
+    # become an attachment.
+    local_x1, local_y1 = x1 - left, y1 - top
+    local_x2 = x2 - left
+    contact_left = max(0, local_x1 + int(width * 0.12))
+    contact_right = min(roi.shape[1], local_x2 - int(width * 0.12))
+    contact_top = max(0, local_y1 - max(4, int(height * 0.18)))
+    contact_bottom = min(roi.shape[0], local_y1 + max(4, int(height * 0.12)))
+    if contact_right <= contact_left or contact_bottom <= contact_top:
+        return False
+
+    min_component_area = max(90, int(width * height * 0.18))
+    for component in stats[1:]:
+        component_x, component_y, component_w, component_h, component_area = map(
+            int, component
+        )
+        if component_area < min_component_area:
+            continue
+
+        component_right = component_x + component_w
+        component_bottom = component_y + component_h
+        # A field-floor component normally spans the full padded ROI. A cactus
+        # arm attached to one fruit is comparatively narrow and elongated.
+        # This is what distinguishes continuous grass behind a red patch from
+        # the arm that actually supports a fruit.
+        if component_w > max(36, int(width * 1.75)):
+            continue
+        if component_h / float(max(component_w, 1)) < 0.80:
+            continue
+        touches_contact_band = (
+            component_right > contact_left
+            and component_x < contact_right
+            and component_bottom > contact_top
+            and component_y < contact_bottom
+        )
+        # The component must rise significantly above the fruit's top. This
+        # rejects a continuous grass patch that happens to touch the box.
+        rises_above_fruit = component_y <= local_y1 - max(8, int(height * 0.45))
+        extends_to_fruit = component_bottom >= local_y1 + max(3, int(height * 0.08))
+        if touches_contact_band and rises_above_fruit and extends_to_fruit:
+            return True
+
+    return False
+
+
+def is_precise_video_mature_fruit(frame_bgr, detection) -> bool:
+    """High-precision video gate: count only attached, mature fruit.
+
+    Video compression and camera movement make colour segmentation noisier
+    than still photos.  This gate intentionally favours precision: a candidate
+    must be a countable mature fruit, contain green bracts, and be connected to
+    cactus tissue above it.  Ground/grass detections therefore never enter the
+    tracker or the annotated result.
+    """
+    if not detection:
+        return False
+
+    box = detection.get("box")
+    if not box or len(box) != 4 or frame_bgr is None or frame_bgr.size == 0:
+        return False
+
+    x1, y1, x2, y2 = map(int, box)
+    width, height = x2 - x1, y2 - y1
+    frame_height, frame_width = frame_bgr.shape[:2]
+    if width < max(28, int(min(frame_width, frame_height) * 0.035)) or height < max(
+        28, int(min(frame_width, frame_height) * 0.035)
+    ):
+        return False
+
+    if not is_countable_mature_dragonfruit(
+        frame_bgr,
+        box,
+        float(detection.get("confidence", 0.0)),
+        require_visible_bracts=True,
+    ):
+        return False
+
+    attached_to_stem = has_attached_pitaya_stem(frame_bgr, box)
+    center_y = y1 + (height / 2.0)
+    # The lower quarter of a field frame is commonly grass/soil.  Accept a
+    # low-hanging fruit there only when the attachment test proves that it is
+    # still on a cactus arm.
+    if center_y >= frame_height * 0.74 and not attached_to_stem:
+        return False
+
+    return attached_to_stem
+
+
+def is_precise_image_mature_fruit(frame_bgr, detection) -> bool:
+    """High-precision still-image gate for field yield records.
+
+    The original image validator allowed a very strong red region without a
+    visible attachment, which is helpful for a close-up but also lets soil and
+    dried material be reported as fruit.  Yield photos are field assessments,
+    so require the fruit to be visibly attached to pitaya tissue before it can
+    be shown or saved.  This intentionally prefers an explicit no-detection
+    result over an incorrect fruit count.
+    """
+    if not detection:
+        return False
+    box = detection.get("box")
+    if not box or len(box) != 4:
+        return False
+    if not is_countable_mature_dragonfruit(
+        frame_bgr, box, float(detection.get("confidence", 0.0)), require_visible_bracts=True
+    ):
+        return False
+    return has_attached_pitaya_stem(frame_bgr, box)
+
+
 def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> bool:
     """Return whether a model box looks like a mature dragon fruit.
 
@@ -1052,14 +1213,18 @@ def count_mature_in_video(
         if not cap.isOpened():
             raise RuntimeError(f"Cannot open video source: {source}")
 
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        if fps < 1.0:
+            fps = 20.0
+
         unique_ids = set()
         tracks = []
         next_track_id = 1
         frame_count = 0
-        # Three frames are only ~0.06 seconds on the submitted 48 FPS phone
-        # videos, which is too brief to distinguish a red leaf/flower glint
-        # from a fruit. Confirm it for a quarter of a second before counting.
-        min_confirm_hits = max(3, int(round(fps * 0.25)))
+        # A fixed three frames are only ~0.06 seconds on a 48 FPS phone
+        # recording. Require roughly a quarter second of consecutive valid
+        # observations before a detection may change the count.
+        min_confirm_hits = max(5, int(round(fps * 0.25)))
         max_missed_frames = 120
         try:
             while True:
@@ -1078,12 +1243,7 @@ def count_mature_in_video(
                     for detection in detect_focused_mature_fruits(
                         frame, image_mode=False
                     )
-                    if is_countable_mature_dragonfruit(
-                        frame,
-                        detection["box"],
-                        detection["confidence"],
-                        require_visible_bracts=True,
-                    )
+                    if is_precise_video_mature_fruit(frame, detection)
                 ]
                 frame_h, frame_w = frame.shape[:2]
                 max_distance = max(32.0, float(np.hypot(frame_w, frame_h)) * 0.10)
@@ -1184,8 +1344,9 @@ def count_mature_in_video(
                 continue
             if int(cls_id) in mature_class_ids:
                 if frame_bgr is not None and index < len(xyxys):
-                    if not is_countable_mature_dragonfruit(
-                        frame_bgr, xyxys[index], box_conf
+                    if not is_precise_video_mature_fruit(
+                        frame_bgr,
+                        {"box": xyxys[index], "confidence": float(box_conf)},
                     ):
                         continue
                 track_id = int(track_id)
@@ -1377,12 +1538,7 @@ def annotate_video_and_count(
                 for detection in detect_focused_mature_fruits(
                     frame, image_mode=False
                 )
-                if is_countable_mature_dragonfruit(
-                    frame,
-                    detection["box"],
-                    detection["confidence"],
-                    require_visible_bracts=True,
-                )
+                if is_precise_video_mature_fruit(frame, detection)
             ]
             mature_boxes = [
                 (int(d["box"][0]), int(d["box"][1]),
@@ -1685,8 +1841,12 @@ def annotate_video_and_count(
                     continue
                 if box_w < 12 or box_h < 12:
                     continue
-                if not is_countable_mature_dragonfruit(
-                    orig, (x1, y1, x2, y2), box_conf
+                if not is_precise_video_mature_fruit(
+                    orig,
+                    {
+                        "box": (x1, y1, x2, y2),
+                        "confidence": float(box_conf),
+                    },
                 ):
                     continue
                 if track_id is None:
@@ -1703,10 +1863,10 @@ def annotate_video_and_count(
                     "hits": hits,
                     "last_frame": frame_count,
                 }
-                # A fleeting detection is neither drawn nor counted. Showing
-                # only three consecutive confirmations removes the scattered
-                # background boxes from the annotated video.
-                if hits < 3:
+                # A fleeting detection is neither drawn nor counted. Require
+                # roughly a quarter second of consecutive confirmations so a
+                # red ground/leaf flicker cannot become an annotated fruit.
+                if hits < max(5, int(round(fps * 0.25))):
                     continue
 
                 unique_ids.add(track_id)
@@ -3508,9 +3668,7 @@ def yield_image_detect():
                 for detection in detect_focused_mature_fruits(
                     frame_bgr, image_mode=True
                 )
-                if is_countable_mature_dragonfruit(
-                    frame_bgr, detection["box"], detection["confidence"]
-                )
+                if is_precise_image_mature_fruit(frame_bgr, detection)
             ]
 
         # The colour detector is reliable for clear, close fruit but loses
@@ -3559,7 +3717,10 @@ def yield_image_detect():
                         or ((x2 - x1) * (y2 - y1)) / max(1.0, frame_area) > 0.18
                     ):
                         continue
-                    if not is_countable_mature_dragonfruit(frame_bgr, b, c):
+                    if not is_precise_image_mature_fruit(
+                        frame_bgr,
+                        {"box": b, "confidence": float(c)},
+                    ):
                         continue
                     detections.append(
                         {
