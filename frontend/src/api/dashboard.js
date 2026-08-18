@@ -194,9 +194,9 @@ export async function uploadYieldImage(file, conf = 0.55, detectionMode = 'photo
     form.append('image', file);
     form.append('conf', String(conf));
     form.append('detection_mode', detectionMode);
-    // Combine the strict fruit-colour/context checks with the trained model.
-    // The model helps recover small or partly hidden fruit in wide photos;
-    // the server still rejects whole-plant and unrelated-object boxes.
+    // The trained fully-red-fruit class is the source of truth. The server
+    // then verifies ripe colour, fruit bracts, and cactus context before a
+    // box can be counted, which rejects background and dried plant regions.
     form.append('method', 'hybrid');
 
     const response = await fetch(`${API_BASE}/yield-detect`, {
@@ -224,7 +224,9 @@ export async function uploadYieldVideo(videoFile, conf = 0.55) {
     const form = new FormData();
     form.append('video', videoFile);
     form.append('conf', String(conf));
-    form.append('method', 'color');
+    // Count only the trained fully-mature fruit class. The backend confirms a
+    // ripe-red body, bracts, and cactus context before showing a stable box.
+    form.append('method', 'yolo');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
@@ -251,7 +253,7 @@ export async function detectYieldFromStream(streamUrl, conf = 0.55) {
     const form = new FormData();
     form.append('stream_url', streamUrl);
     form.append('conf', String(conf));
-    form.append('method', 'color');
+    form.append('method', 'yolo');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',

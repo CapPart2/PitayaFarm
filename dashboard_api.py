@@ -393,6 +393,43 @@ def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> 
     )
 
 
+def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> bool:
+    """Return True only for a harvest-mature fruit that is safe to add to yield.
+
+    The broad candidate check is deliberately tolerant for video tracking, but
+    a still-image yield count must not turn dried blooms, soil, or red foliage
+    into fruit.  A valid count therefore needs all three visual signals: a
+    substantial ripe-red body, green dragon-fruit bracts inside its box, and
+    adjacent cactus tissue.
+    """
+    if not is_mature_dragonfruit_candidate(frame_bgr, box, confidence):
+        return False
+
+    x1, y1, x2, y2 = map(int, box)
+    x1, y1 = max(0, x1), max(0, y1)
+    x2, y2 = min(frame_bgr.shape[1], x2), min(frame_bgr.shape[0], y2)
+    width, height = x2 - x1, y2 - y1
+    if width < 12 or height < 12:
+        return False
+
+    # Dried flowers and reddish soil can pass a loose hue mask, but do not
+    # have a sizeable saturated ripe-red core or the fruit's internal bracts.
+    if mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.18:
+        return False
+    if not has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2)):
+        return False
+    if not has_pitaya_fruit_context(frame_bgr, x1, y1, width, height):
+        return False
+
+    roi = frame_bgr[y1:y2, x1:x2]
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    ripe_red = cv2.bitwise_or(
+        cv2.inRange(hsv, np.array([0, 85, 85]), np.array([18, 255, 255])),
+        cv2.inRange(hsv, np.array([138, 85, 85]), np.array([180, 255, 255])),
+    )
+    return cv2.countNonZero(ripe_red) / float(width * height) >= 0.12
+
+
 def is_live_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> bool:
     """Backward-compatible name for the common mature-fruit validator."""
     return is_mature_dragonfruit_candidate(frame_bgr, box, confidence)
@@ -1058,6 +1095,7 @@ def count_mature_in_video(
         results_iter = model.track(
             source=source,
             conf=conf,
+            imgsz=960,
             stream=True,
             verbose=False,
             save=False,
@@ -1091,7 +1129,7 @@ def count_mature_in_video(
                 continue
             if int(cls_id) in mature_class_ids:
                 if frame_bgr is not None and index < len(xyxys):
-                    if not is_mature_dragonfruit_candidate(
+                    if not is_countable_mature_dragonfruit(
                         frame_bgr, xyxys[index], box_conf
                     ):
                         continue
@@ -1498,6 +1536,7 @@ def annotate_video_and_count(
         results_iter = model.track(
             source=source,
             conf=conf,
+            imgsz=960,
             iou=0.45,
             stream=True,
             verbose=False,
@@ -1508,6 +1547,7 @@ def annotate_video_and_count(
     except Exception as e:
         raise RuntimeError(f"YOLO tracking failed: {e}")
 
+    stable_track_hits = {}
     for r in results_iter:
         orig = (
             r.orig_img.copy()
@@ -1567,22 +1607,38 @@ def annotate_video_and_count(
                 x1, y1, x2, y2 = map(int, xyxy)
                 box_w = x2 - x1
                 box_h = y2 - y1
-                if frame_area > 0 and (box_w * box_h / frame_area) > 0.55:
+                # A whole-plant region is never one mature fruit.
+                if frame_area > 0 and (box_w * box_h / frame_area) > 0.18:
                     continue
-                if box_w < 20 or box_h < 20:
+                if box_w < 12 or box_h < 12:
                     continue
-                if not is_mature_dragonfruit_candidate(
+                if not is_countable_mature_dragonfruit(
                     orig, (x1, y1, x2, y2), box_conf
                 ):
                     continue
-                is_mature = True
-                # Always draw detection boxes in blue for consistency
+                if track_id is None:
+                    continue
+
+                track_id = int(track_id)
+                previous = stable_track_hits.get(track_id)
+                hits = (
+                    int(previous["hits"]) + 1
+                    if previous and int(previous["last_frame"]) == frame_count - 1
+                    else 1
+                )
+                stable_track_hits[track_id] = {
+                    "hits": hits,
+                    "last_frame": frame_count,
+                }
+                # A fleeting detection is neither drawn nor counted. Showing
+                # only three consecutive confirmations removes the scattered
+                # background boxes from the annotated video.
+                if hits < 3:
+                    continue
+
+                unique_ids.add(track_id)
+                # Always draw confirmed mature-fruit boxes in blue.
                 color = (255, 0, 0)
-                if is_mature and track_id is not None:
-                    track_id = int(track_id)
-                    track_hits[track_id] = track_hits.get(track_id, 0) + 1
-                    if track_hits[track_id] >= 3:
-                        unique_ids.add(track_id)
                 cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
                 tid_str = f" id:{int(track_id)}" if track_id is not None else ""
                 # Build label text without the class name to avoid showing 'MATURE'
@@ -3370,7 +3426,11 @@ def yield_image_detect():
         scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
 
         detections = []
-        if method in {"color", "hybrid"}:
+        # Colour segmentation is retained for the explicit legacy ``color``
+        # mode. Hybrid uses the trained fully-red-fruit class as the source of
+        # truth; colour is only a strict validation signal below. This keeps a
+        # red/brown background region from becoming a mature yield record.
+        if method == "color":
             detections = detect_focused_mature_fruits(frame_bgr, image_mode=True)
 
         # The colour detector is reliable for clear, close fruit but loses
@@ -3389,7 +3449,7 @@ def yield_image_detect():
                         # Preserve detail from far fruit rather than shrinking
                         # every photo to the model's 640 px training size.
                         imgsz=960,
-                        conf=0.40 if method == "hybrid" else conf,
+                        conf=conf,
                         save=False,
                         verbose=False,
                     )
@@ -3419,7 +3479,7 @@ def yield_image_detect():
                         or ((x2 - x1) * (y2 - y1)) / max(1.0, frame_area) > 0.18
                     ):
                         continue
-                    if not is_mature_dragonfruit_candidate(frame_bgr, b, c):
+                    if not is_countable_mature_dragonfruit(frame_bgr, b, c):
                         continue
                     detections.append(
                         {
