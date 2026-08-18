@@ -471,25 +471,33 @@ def is_precise_video_mature_fruit(frame_bgr, detection) -> bool:
 
 
 def is_precise_image_mature_fruit(frame_bgr, detection) -> bool:
-    """High-precision still-image gate for field yield records.
+    """Validate a mature fruit in a still field image.
 
-    The original image validator allowed a very strong red region without a
-    visible attachment, which is helpful for a close-up but also lets soil and
-    dried material be reported as fruit.  Yield photos are field assessments,
-    so require the fruit to be visibly attached to pitaya tissue before it can
-    be shown or saved.  This intentionally prefers an explicit no-detection
-    result over an incorrect fruit count.
+    This intentionally differs from :func:`is_precise_video_mature_fruit`.
+    A video frame needs a strict, geometric stem-attachment check to suppress
+    flickering red ground/background regions.  In a still field photo, though,
+    ripe fruit often hangs below or beside its supporting cactus arm and the
+    attachment is hidden by the fruit, another arm, or the camera angle.
+    Requiring an arm *directly above* every box therefore discarded valid
+    mature fruits after they had already passed the ripe-colour, compact-shape,
+    nearby-pitaya-context, and small-fruit checks.
+
+    ``is_countable_mature_dragonfruit`` retains those image-appropriate
+    safeguards.  Its normal bract rule also permits a tight detector box when
+    the exposed ripe-red body is sufficiently strong, so valid fruit is not
+    lost merely because its bracts fall just outside the box.
     """
     if not detection:
         return False
     box = detection.get("box")
     if not box or len(box) != 4:
         return False
-    if not is_countable_mature_dragonfruit(
-        frame_bgr, box, float(detection.get("confidence", 0.0)), require_visible_bracts=True
-    ):
-        return False
-    return has_attached_pitaya_stem(frame_bgr, box)
+    return is_countable_mature_dragonfruit(
+        frame_bgr,
+        box,
+        float(detection.get("confidence", 0.0)),
+        require_visible_bracts=False,
+    )
 
 
 def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> bool:
