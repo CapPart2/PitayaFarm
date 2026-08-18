@@ -393,7 +393,9 @@ def is_mature_dragonfruit_candidate(frame_bgr, box, confidence: float = 0.0) -> 
     )
 
 
-def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> bool:
+def is_countable_mature_dragonfruit(
+    frame_bgr, box, confidence: float = 0.0, require_visible_bracts: bool = False
+) -> bool:
     """Return True only for a harvest-mature fruit that is safe to add to yield.
 
     The broad candidate check is deliberately tolerant for video tracking, but
@@ -452,6 +454,9 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
     # boxes are tight around the red body, though, so permit that case only
     # with an exceptionally strong ripe-red signal. This avoids the zero-result
     # regression without allowing brown/background regions back into the count.
+    if require_visible_bracts:
+        return has_bracts
+
     return has_bracts or (
         mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.20
         and ripe_red_ratio >= 0.15
@@ -489,12 +494,12 @@ def is_hsv_fruit_candidate(
     min_side = (
         max(20, int(min(frame_width, frame_height) * 0.026))
         if image_mode
-        else max(36, int(min(frame_width, frame_height) * 0.04))
+        else max(24, int(min(frame_width, frame_height) * 0.03))
     )
     min_box_area = (
         max(500.0, frame_area * 0.00055)
         if image_mode
-        else max(1800.0, frame_area * 0.0015)
+        else max(700.0, frame_area * 0.00075)
     )
     # A fruit cut off by the edge has unstable contours and is the usual
     # source of an oversized/nearby box as the camera pans.  Wait until the
@@ -513,7 +518,7 @@ def is_hsv_fruit_candidate(
     # The still-image workflow photographs the canopy from above; the lowest
     # portion is ground, the tyre, or the stand. Exclude colour-only candidates
     # there instead of letting those objects be labelled as mature fruit.
-    if image_mode and (y + (height / 2.0)) >= frame_height * 0.82:
+    if (y + (height / 2.0)) >= frame_height * 0.82:
         return False
 
     extent = area / box_area
@@ -1065,15 +1070,19 @@ def count_mature_in_video(
                 if max_frames and frame_count > max_frames:
                     break
 
-                # Use the sensitive distant-fruit proposals, then apply the
-                # same strict mature-only gate used for uploaded photos.
+                # Video uses the narrower red range so ground/soil colour is
+                # not proposed as fruit, while the reduced video size floor
+                # above still preserves distant mature fruit.
                 detections = [
                     detection
                     for detection in detect_focused_mature_fruits(
-                        frame, image_mode=True
+                        frame, image_mode=False
                     )
                     if is_countable_mature_dragonfruit(
-                        frame, detection["box"], detection["confidence"]
+                        frame,
+                        detection["box"],
+                        detection["confidence"],
+                        require_visible_bracts=True,
                     )
                 ]
                 frame_h, frame_w = frame.shape[:2]
@@ -1321,14 +1330,10 @@ def annotate_video_and_count(
         next_track_id = 1
         active_tracks = []
         unique_ids = set()
-        # Keep a confirmed track for eight seconds.  This is long enough for
-        # focus hunting, dropped frames, or a hand briefly crossing the lens,
-        # preventing the same fruit from being assigned a second count.
-        # Keep counted identities for the whole practical recording window.
-        # A fruit that leaves the frame briefly or is revisited later in the
-        # same sweep must reconnect to its original identity, never create a
-        # second yield count.
-        track_max_missed = max(2160, int(round(fps * 45.0)))
+        # Keep confirmed identities for the practical recording window. A
+        # fruit revisited after the camera pans away must reconnect to its
+        # existing identity instead of becoming another yield count.
+        track_max_missed = max(8640, int(round(fps * 180.0)))
         display_hold_frames = max(6, int(round(fps * 0.25)))
         min_confirm_hits = 3
 
@@ -1364,15 +1369,19 @@ def annotate_video_and_count(
                         print(f"Failed to initialize codec {codec_name}: {e}")
                         continue
 
-            # Use the same distant-fruit proposals as image upload, but retain
-            # only candidates that satisfy the strict mature-only gate.
+            # Video uses a narrow ripe-red range and requires visible bracts;
+            # grass, ground, dry leaves, and red background objects therefore
+            # cannot form a mature-fruit track.
             focused_detections = [
                 detection
                 for detection in detect_focused_mature_fruits(
-                    frame, image_mode=True
+                    frame, image_mode=False
                 )
                 if is_countable_mature_dragonfruit(
-                    frame, detection["box"], detection["confidence"]
+                    frame,
+                    detection["box"],
+                    detection["confidence"],
+                    require_visible_bracts=True,
                 )
             ]
             mature_boxes = [
@@ -1445,14 +1454,27 @@ def annotate_video_and_count(
                     min_size_ratio = 0.12 if track.get("counted") else 0.28
                     if size_ratio < min_size_ratio:
                         continue
-                    allowed_distance = max(
-                        24.0,
-                        min(
-                            diag * 0.14,
-                            0.85 * max(current_diag, previous_diag)
-                            + 10.0 * frame_gap,
-                        ),
-                    )
+                    if track.get("counted"):
+                        # Prefer reconnecting an already counted fruit after
+                        # a camera pan. This intentionally favours avoiding a
+                        # duplicate count over creating a new identity.
+                        allowed_distance = max(
+                            48.0,
+                            min(
+                                diag * 0.42,
+                                1.40 * max(current_diag, previous_diag)
+                                + 18.0 * frame_gap,
+                            ),
+                        )
+                    else:
+                        allowed_distance = max(
+                            24.0,
+                            min(
+                                diag * 0.14,
+                                0.85 * max(current_diag, previous_diag)
+                                + 10.0 * frame_gap,
+                            ),
+                        )
                     if iou < 0.08 and dist > allowed_distance:
                         continue
 
