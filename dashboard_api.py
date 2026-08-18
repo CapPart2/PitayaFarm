@@ -436,11 +436,23 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
     if ripe_red_ratio < 0.09:
         return False
 
+    has_bracts = has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2))
+
+    # A tiny red/brown patch is the most common remaining false positive in a
+    # wide field image. A distant fruit is still allowed, but it needs stronger
+    # ripe colour *and* visible bracts before it can change the yield total.
+    if min(width, height) < 40 and (
+        not has_bracts
+        or mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.22
+        or ripe_red_ratio < 0.18
+    ):
+        return False
+
     # Most mature-fruit boxes include green bracts. Some valid colour-region
     # boxes are tight around the red body, though, so permit that case only
     # with an exceptionally strong ripe-red signal. This avoids the zero-result
     # regression without allowing brown/background regions back into the count.
-    return has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2)) or (
+    return has_bracts or (
         mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.20
         and ripe_red_ratio >= 0.15
     )
@@ -775,9 +787,19 @@ def detect_focused_mature_fruits(frame_bgr, image_mode: bool = True):
             for left, top, right, bottom in object_guard_boxes
         ):
             continue
-        # This score is for display only. The colour/shape/context tests above
-        # are the acceptance rule, not a generic-object confidence score.
-        confidence = min(0.99, max(0.60, 0.60 + (core_ratio * 1.20)))
+        # This is an evidence score, not a model probability. It combines ripe
+        # colour and visible bracts without the old artificial 99% plateau.
+        has_bracts = has_dragonfruit_bracts(frame_bgr, (x, y, x2, y2))
+        confidence = min(
+            0.95,
+            max(
+                0.60,
+                0.48
+                + min(core_ratio / 0.45, 1.0) * 0.25
+                + min(broad_ripe_ratio / 0.45, 1.0) * 0.15
+                + (0.12 if has_bracts else 0.0),
+            ),
+        )
         detections.append(
             {
                 "box": [float(x), float(y), float(x2), float(y2)],
@@ -3539,7 +3561,8 @@ def yield_image_detect():
 
         for det in detections:
             x1, y1, x2, y2 = det["box"]
-            label = f"{det['label']} {det['confidence']:.2f}"
+            score_label = "score" if det.get("source") == "fruit_region" else "conf"
+            label = f"{det['label']} {score_label} {det['confidence']:.2f}"
             draw.rectangle([x1, y1, x2, y2], outline="#0066FF", width=3)
             # Compute text size in a way compatible with Pillow versions
             try:

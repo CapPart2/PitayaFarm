@@ -696,7 +696,9 @@ export default function YieldPrediction() {
                       <li key={i} className="flex items-center justify-between">
                         <div>
                           <strong>{d.label === 'MATURE' ? 'MATURE FRUIT' : d.label}</strong>
-                          <div className="text-xs text-gray-500 dark:text-gray-400">Confidence: {(d.confidence * 100).toFixed(1)}%</div>
+                          <div className="text-xs text-gray-500 dark:text-gray-400">
+                            {d.source === 'fruit_region' ? 'Maturity score' : 'Model confidence'}: {(d.confidence * 100).toFixed(1)}%
+                          </div>
                         </div>
                         <div className="text-xs text-gray-600 dark:text-gray-300">Box: {d.box.map(n => Math.round(n)).join(', ')}</div>
                       </li>
