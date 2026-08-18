@@ -418,7 +418,10 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
 
     # Dried flowers and reddish soil can pass a loose hue mask, but do not
     # have a sizeable saturated ripe-red core or the fruit's internal bracts.
-    if mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.18:
+    # A partly shaded or partially covered harvest-ready fruit exposes less
+    # red skin than a clear close-up.  Keep a meaningful ripe core, but do not
+    # drop the small/over-ripe fruit visible in a real plant photo.
+    if mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.12:
         return False
     if not has_pitaya_fruit_context(frame_bgr, x1, y1, width, height):
         return False
@@ -430,7 +433,7 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
         cv2.inRange(hsv, np.array([138, 85, 85]), np.array([180, 255, 255])),
     )
     ripe_red_ratio = cv2.countNonZero(ripe_red) / float(width * height)
-    if ripe_red_ratio < 0.12:
+    if ripe_red_ratio < 0.09:
         return False
 
     # Most mature-fruit boxes include green bracts. Some valid colour-region
@@ -438,8 +441,8 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
     # with an exceptionally strong ripe-red signal. This avoids the zero-result
     # regression without allowing brown/background regions back into the count.
     return has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2)) or (
-        mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.30
-        and ripe_red_ratio >= 0.22
+        mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.20
+        and ripe_red_ratio >= 0.15
     )
 
 
