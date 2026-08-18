@@ -412,11 +412,13 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
     if width < 12 or height < 12:
         return False
 
+    frame_area = float(frame_bgr.shape[0] * frame_bgr.shape[1])
+    if (width * height) / max(1.0, frame_area) > 0.18:
+        return False
+
     # Dried flowers and reddish soil can pass a loose hue mask, but do not
     # have a sizeable saturated ripe-red core or the fruit's internal bracts.
     if mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.18:
-        return False
-    if not has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2)):
         return False
     if not has_pitaya_fruit_context(frame_bgr, x1, y1, width, height):
         return False
@@ -427,7 +429,18 @@ def is_countable_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> 
         cv2.inRange(hsv, np.array([0, 85, 85]), np.array([18, 255, 255])),
         cv2.inRange(hsv, np.array([138, 85, 85]), np.array([180, 255, 255])),
     )
-    return cv2.countNonZero(ripe_red) / float(width * height) >= 0.12
+    ripe_red_ratio = cv2.countNonZero(ripe_red) / float(width * height)
+    if ripe_red_ratio < 0.12:
+        return False
+
+    # Most mature-fruit boxes include green bracts. Some valid colour-region
+    # boxes are tight around the red body, though, so permit that case only
+    # with an exceptionally strong ripe-red signal. This avoids the zero-result
+    # regression without allowing brown/background regions back into the count.
+    return has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2)) or (
+        mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.30
+        and ripe_red_ratio >= 0.22
+    )
 
 
 def is_live_mature_dragonfruit(frame_bgr, box, confidence: float = 0.0) -> bool:
@@ -1027,9 +1040,17 @@ def count_mature_in_video(
                 if max_frames and frame_count > max_frames:
                     break
 
-                # Video has stable successive frames, so use its narrower
-                # colour range and never use still-photo recovery boxes.
-                detections = detect_focused_mature_fruits(frame, image_mode=False)
+                # Use the sensitive distant-fruit proposals, then apply the
+                # same strict mature-only gate used for uploaded photos.
+                detections = [
+                    detection
+                    for detection in detect_focused_mature_fruits(
+                        frame, image_mode=True
+                    )
+                    if is_countable_mature_dragonfruit(
+                        frame, detection["box"], detection["confidence"]
+                    )
+                ]
                 frame_h, frame_w = frame.shape[:2]
                 max_distance = max(32.0, float(np.hypot(frame_w, frame_h)) * 0.10)
                 matched_ids = set()
@@ -1318,12 +1339,17 @@ def annotate_video_and_count(
                         print(f"Failed to initialize codec {codec_name}: {e}")
                         continue
 
-            # The same fruit-region detector is used by image upload, browser
-            # camera, and video. It produces one box per mature fruit, never a
-            # whole-plant box from the unreliable YOLO model.
-            # A moving video must not use the broad still-photo recovery pass:
-            # it produces oversized boxes that absorb nearby red regions.
-            focused_detections = detect_focused_mature_fruits(frame, image_mode=False)
+            # Use the same distant-fruit proposals as image upload, but retain
+            # only candidates that satisfy the strict mature-only gate.
+            focused_detections = [
+                detection
+                for detection in detect_focused_mature_fruits(
+                    frame, image_mode=True
+                )
+                if is_countable_mature_dragonfruit(
+                    frame, detection["box"], detection["confidence"]
+                )
+            ]
             mature_boxes = [
                 (int(d["box"][0]), int(d["box"][1]),
                  int(d["box"][2] - d["box"][0]), int(d["box"][3] - d["box"][1]))
@@ -3426,12 +3452,19 @@ def yield_image_detect():
         scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
 
         detections = []
-        # Colour segmentation is retained for the explicit legacy ``color``
-        # mode. Hybrid uses the trained fully-red-fruit class as the source of
-        # truth; colour is only a strict validation signal below. This keeps a
-        # red/brown background region from becoming a mature yield record.
-        if method == "color":
-            detections = detect_focused_mature_fruits(frame_bgr, image_mode=True)
+        # The colour/shape detector supplies reliable proposals for field
+        # photos, including fruit the current model misses at a distance. Each
+        # proposal must still pass the mature-only gate before it is shown.
+        if method in {"color", "hybrid"}:
+            detections = [
+                detection
+                for detection in detect_focused_mature_fruits(
+                    frame_bgr, image_mode=True
+                )
+                if is_countable_mature_dragonfruit(
+                    frame_bgr, detection["box"], detection["confidence"]
+                )
+            ]
 
         # The colour detector is reliable for clear, close fruit but loses
         # small fruit in a wide orchard/greenhouse photo.  In hybrid mode the

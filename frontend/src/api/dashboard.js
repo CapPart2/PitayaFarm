@@ -224,9 +224,9 @@ export async function uploadYieldVideo(videoFile, conf = 0.55) {
     const form = new FormData();
     form.append('video', videoFile);
     form.append('conf', String(conf));
-    // Count only the trained fully-mature fruit class. The backend confirms a
-    // ripe-red body, bracts, and cactus context before showing a stable box.
-    form.append('method', 'yolo');
+    // The backend uses mature-fruit colour/shape proposals and applies the
+    // strict ripe-body, bract, and cactus-context gate before counting.
+    form.append('method', 'color');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
@@ -253,7 +253,7 @@ export async function detectYieldFromStream(streamUrl, conf = 0.55) {
     const form = new FormData();
     form.append('stream_url', streamUrl);
     form.append('conf', String(conf));
-    form.append('method', 'yolo');
+    form.append('method', 'color');
 
     const response = await fetch(`${API_BASE}/yield-video-detect`, {
       method: 'POST',
