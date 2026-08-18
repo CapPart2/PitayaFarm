@@ -219,8 +219,11 @@ def mature_core_ratio(frame_bgr, x: int, y: int, width: int, height: int) -> flo
         return 0.0
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-    red_low = cv2.inRange(hsv, np.array([0, 85, 100]), np.array([12, 255, 255]))
-    red_high = cv2.inRange(hsv, np.array([145, 85, 100]), np.array([180, 255, 255]))
+    # Keep hue limited to ripe pink/red, but admit lower saturation/value for
+    # fruit under leaves or a canopy shadow.  Shape and plant-context checks
+    # below prevent this shadow allowance from becoming a ground detector.
+    red_low = cv2.inRange(hsv, np.array([0, 55, 55]), np.array([18, 255, 255]))
+    red_high = cv2.inRange(hsv, np.array([138, 55, 55]), np.array([180, 255, 255]))
     return cv2.countNonZero(cv2.bitwise_or(red_low, red_high)) / float(width * height)
 
 
@@ -412,14 +415,29 @@ def is_hsv_fruit_candidate(
 
     # Field noise (flowers, soil specks, and shadows) is much smaller than a
     # countable fruit. Partial objects on the edge cannot be counted reliably.
-    min_side = max(36, int(min(frame_width, frame_height) * 0.04))
+    # A distant fruit in a high-resolution still photo can occupy only a few
+    # dozen pixels.  The old 36 px / 4% limit was more restrictive for photos
+    # than for the moving-video flow, so those visible fruits disappeared
+    # before the colour, shape, and cactus-context checks could assess them.
+    # Keep video's existing noise guard, while allowing a photo candidate down
+    # to 20 px only when it also passes all of those later checks.
+    min_side = (
+        max(20, int(min(frame_width, frame_height) * 0.026))
+        if image_mode
+        else max(36, int(min(frame_width, frame_height) * 0.04))
+    )
+    min_box_area = (
+        max(500.0, frame_area * 0.00055)
+        if image_mode
+        else max(1800.0, frame_area * 0.0015)
+    )
     # A fruit cut off by the edge has unstable contours and is the usual
     # source of an oversized/nearby box as the camera pans.  Wait until the
     # entire fruit is inside the frame before it can enter the tracker.
     edge_margin = max(16, int(round(min_side * 0.75)))
     if (
         min(width, height) < min_side
-        or box_area < max(1800.0, frame_area * 0.0015)
+        or box_area < min_box_area
         or x <= edge_margin
         or y <= edge_margin
         or x + width >= frame_width - edge_margin
@@ -448,12 +466,17 @@ def is_hsv_fruit_candidate(
         has_internal_bracts = has_dragonfruit_bracts(
             frame_bgr, (x, y, x + width, y + height)
         )
-        # Green surrounding vegetation alone is too easy to satisfy in a
-        # farm scene: a red tool, flower, or shirt can be beside a plant.
-        # A mature pitaya has distinctive green bracts in the fruit body, so
-        # make that evidence mandatory. It also lets a true close-up pass when
-        # the surrounding stem is cropped out of a live camera frame.
-        if not has_internal_bracts:
+        has_nearby_context = has_pitaya_fruit_context(
+            frame_bgr, x, y, width, height
+        )
+        # Bracts are ideal evidence.  Some fully ripe fruits have dark or
+        # cropped bracts, however, so accept that case only when the box has a
+        # strong mature core and is immediately attached to pitaya tissue.
+        # This recovers visible/shadowed fruit without accepting arbitrary
+        # red objects in the background.
+        if not has_internal_bracts and not (
+            has_nearby_context and mature_core >= 0.14
+        ):
             return False
     standard_shape = (
         extent >= 0.32
@@ -562,11 +585,14 @@ def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
     lower_green = np.array([28, 70, 60])
     upper_green = np.array([80, 255, 255])
     # Still photos have stronger shadows and sunlight than the video stream.
-    # Accept their orange-pink highlights only in image mode; video retains the
-    # narrower colour range that prevents ground detections.
-    lower_red1 = np.array([0, 70 if image_mode else 85, 85 if image_mode else 100])
-    upper_red1 = np.array([24 if image_mode else 12, 255, 255])
-    lower_red2 = np.array([140 if image_mode else 145, 70 if image_mode else 85, 85 if image_mode else 100])
+    # Keep their wider orange-pink hue range, but do not require more
+    # saturation/value than video: distant fruit becomes desaturated by glare,
+    # compression, and foliage, and the previous 70/85 lower limits hid it.
+    # Shape, ripe-core, and cactus-context checks below remain the false-positive
+    # guard for these less-saturated pixels.
+    lower_red1 = np.array([0, 55, 55])
+    upper_red1 = np.array([24 if image_mode else 18, 255, 255])
+    lower_red2 = np.array([140 if image_mode else 138, 55, 55])
     upper_red2 = np.array([180, 255, 255])
 
     mask_green = cv2.inRange(img_hsv, lower_green, upper_green)
@@ -574,7 +600,10 @@ def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
     mask_red2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
     mask_pink = cv2.bitwise_or(mask_red1, mask_red2)
 
-    kernel_size = 9 if image_mode else 5
+    # A large closing kernel merges nearby small fruit in still photos.  A
+    # five-pixel kernel retains separate distant fruit while still smoothing
+    # compression noise.
+    kernel_size = 5
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
     mask_green = cv2.morphologyEx(mask_green, cv2.MORPH_CLOSE, kernel)
     mask_pink = cv2.morphologyEx(mask_pink, cv2.MORPH_CLOSE, kernel)
@@ -588,17 +617,18 @@ def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
     mature_boxes = []
     rejected_regions = []
 
+    min_contour_area = 65 if image_mode else 150
     for cnt in contours_pink:
         area = cv2.contourArea(cnt)
         x, y, w_fruit, h_fruit = cv2.boundingRect(cnt)
-        if area <= 150 or not is_hsv_fruit_candidate(
+        if area <= min_contour_area or not is_hsv_fruit_candidate(
             cnt,
             mask_pink,
             frame_bgr.shape,
             image_mode=image_mode,
             frame_bgr=frame_bgr,
         ):
-            if image_mode and area > 150:
+            if image_mode and area > min_contour_area:
                 rejected_regions.append((x, y, x + w_fruit, y + h_fruit))
             continue
         mature_boxes.append((x, y, w_fruit, h_fruit))
@@ -946,7 +976,10 @@ def count_mature_in_video(
         tracks = []
         next_track_id = 1
         frame_count = 0
-        min_confirm_hits = 3
+        # Three frames are only ~0.06 seconds on the submitted 48 FPS phone
+        # videos, which is too brief to distinguish a red leaf/flower glint
+        # from a fruit. Confirm it for a quarter of a second before counting.
+        min_confirm_hits = max(3, int(round(fps * 0.25)))
         max_missed_frames = 120
         try:
             while True:
@@ -3327,10 +3360,6 @@ def yield_image_detect():
                 "success": False,
                 "error": "Unsupported mature-fruit detection method.",
             }), 400
-        # Older clients sent "hybrid". Keep that request format compatible
-        # while routing it to the current strict fruit-region detector.
-        if method == "hybrid":
-            method = "color"
         frame_bgr = cv2.imread(img_path)
         if frame_bgr is None:
             return jsonify({"success": False, "error": "Failed to read saved image"}), 400
@@ -3341,15 +3370,29 @@ def yield_image_detect():
         scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
 
         detections = []
-        if method == "color":
+        if method in {"color", "hybrid"}:
             detections = detect_focused_mature_fruits(frame_bgr, image_mode=True)
-        else:
+
+        # The colour detector is reliable for clear, close fruit but loses
+        # small fruit in a wide orchard/greenhouse photo.  In hybrid mode the
+        # trained detector adds its proposals at a larger inference size;
+        # every proposal still has to pass the ripe-colour and pitaya-context
+        # checks below before it can affect a yield count.
+        if method in {"yolo", "hybrid"}:
             model = None
             results = []
             try:
                 model = load_yolo_model()
                 results = list(
-                    model.predict(source=img_path, conf=conf, save=False, verbose=False)
+                    model.predict(
+                        source=img_path,
+                        # Preserve detail from far fruit rather than shrinking
+                        # every photo to the model's 640 px training size.
+                        imgsz=960,
+                        conf=0.40 if method == "hybrid" else conf,
+                        save=False,
+                        verbose=False,
+                    )
                 )
             except Exception as exc:
                 return jsonify({"success": False, "error": str(exc)}), 500
@@ -3365,6 +3408,16 @@ def yield_image_detect():
                     boxes.xyxy.tolist(), boxes.conf.tolist(), boxes.cls.tolist()
                 ):
                     if int(cl) not in mature_class_ids:
+                        continue
+                    x1, y1, x2, y2 = map(float, b)
+                    frame_area = float(frame_bgr.shape[0] * frame_bgr.shape[1])
+                    # A one-class detector may occasionally return one box
+                    # around an entire plant. It cannot represent one fruit.
+                    if (
+                        x2 <= x1
+                        or y2 <= y1
+                        or ((x2 - x1) * (y2 - y1)) / max(1.0, frame_area) > 0.18
+                    ):
                         continue
                     if not is_mature_dragonfruit_candidate(frame_bgr, b, c):
                         continue

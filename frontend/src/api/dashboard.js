@@ -194,10 +194,10 @@ export async function uploadYieldImage(file, conf = 0.55, detectionMode = 'photo
     form.append('image', file);
     form.append('conf', String(conf));
     form.append('detection_mode', detectionMode);
-    // This detector requires ripe colour, fruit shape, nearby cactus tissue,
-    // and green bracts inside the fruit.  A plain red/pink background object
-    // therefore cannot be recorded as a mature fruit.
-    form.append('method', 'color');
+    // Combine the strict fruit-colour/context checks with the trained model.
+    // The model helps recover small or partly hidden fruit in wide photos;
+    // the server still rejects whole-plant and unrelated-object boxes.
+    form.append('method', 'hybrid');
 
     const response = await fetch(`${API_BASE}/yield-detect`, {
       method: 'POST',

@@ -55,6 +55,13 @@ export async function fetchYield() {
 
     return {
       predictedYield: records.reduce((sum, record) => sum + (Number(record.predicted_yield) || 0), 0),
+      // Dashboard uses individual records so it can switch between monthly and
+      // yearly totals. Keep this normalized shape alongside the pre-aggregated
+      // data used by the yield assessment page.
+      yieldEstimation: records.map((record) => ({
+        period: record.prediction_date || record.created_at || '',
+        yieldKg: Number(record.predicted_yield) || 0,
+      })),
       ...buildYieldData(records),
       yieldByMedia: {
         picture: buildYieldData(pictureRecords),
@@ -65,6 +72,7 @@ export async function fetchYield() {
     console.warn('Yield API unavailable, returning empty data:', error.message)
     return {
       predictedYield: 0,
+      yieldEstimation: [],
       ...EMPTY_YIELD_DATA,
       yieldByMedia: {
         picture: { ...EMPTY_YIELD_DATA },
