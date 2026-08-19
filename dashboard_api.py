@@ -934,7 +934,7 @@ def detect_occluded_mature_core_boxes(frame_bgr, rejected_regions):
             continue
         boxes.append((x1, y1, x2, y2))
 
-    return suppress_overlapping_boxes(boxes, iou_threshold=0.30)
+    return suppress_overlapping_boxes(boxes, iou_threshold=0.10)
 
 
 def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
@@ -1023,7 +1023,7 @@ def detect_mature_fruits_hsv(frame_bgr, image_mode: bool = False):
                 continue
             mature_boxes.append(core_box)
 
-        mature_boxes = suppress_overlapping_boxes(mature_boxes, iou_threshold=0.30)
+        mature_boxes = suppress_overlapping_boxes(mature_boxes, iou_threshold=0.10)
 
     mature_boxes = [(x1, y1, x2 - x1, y2 - y1) for x1, y1, x2, y2 in mature_boxes]
 
@@ -1114,7 +1114,7 @@ def detect_focused_mature_fruits(frame_bgr, image_mode: bool = True):
                 "source": "fruit_region",
             }
         )
-    return suppress_overlapping_detections(detections, iou_threshold=0.30)
+    return suppress_overlapping_detections(detections, iou_threshold=0.10)
 
 
 def box_iou(box_a, box_b):
@@ -1138,7 +1138,7 @@ def box_iou(box_a, box_b):
     return inter_area / union_area
 
 
-def suppress_overlapping_detections(detections, iou_threshold: float = 0.42):
+def suppress_overlapping_detections(detections, iou_threshold: float = 0.15):
     kept = []
     for detection in sorted(
         detections, key=lambda item: float(item.get("confidence", 0.0)), reverse=True
@@ -1151,7 +1151,7 @@ def suppress_overlapping_detections(detections, iou_threshold: float = 0.42):
     return kept
 
 
-def suppress_overlapping_boxes(boxes, iou_threshold: float = 0.42):
+def suppress_overlapping_boxes(boxes, iou_threshold: float = 0.15):
     kept = []
     for box in boxes:
         if any(
