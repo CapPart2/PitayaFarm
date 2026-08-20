@@ -1,0 +1,8 @@
+path: "e:/Final for Capstone/Activity-AppDev/Mature Dragon Fruit"
+
+train: train/images
+val: val/images
+
+nc: 1
+names:
+  0: fully_red_dragon_fruit
