@@ -8,7 +8,9 @@ const buttonBase =
 export default function Landing() {
   const navigate = useNavigate()
   const logoUrl = useMemo(() => `${import.meta.env.BASE_URL}pitaya-logo.png`, [])
-  const apkDownloadUrl = import.meta.env.VITE_ANDROID_APK_URL || '/downloads/pitaya.apk'
+  // This fallback is the real APK produced by Android Studio.  A deployment
+  // may override it with VITE_ANDROID_APK_URL when the APK is hosted elsewhere.
+  const apkDownloadUrl = import.meta.env.VITE_ANDROID_APK_URL || '/downloads/app-debug.apk'
 
   useEffect(() => {
     document.documentElement.classList.remove('dark')

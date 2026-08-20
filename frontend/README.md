@@ -30,10 +30,12 @@ Output in `dist/`. Can be served by Django static or any static host.
 
 ### Android APK download
 
-Set `VITE_ANDROID_APK_URL` to the public URL of the final APK before building.
-The landing page's **Download Android APK** button uses this value. Upload the
-APK to a file host or release service; do not add large generated APK files to
-the repository or Railway deployment.
+The landing page downloads the real Android Studio debug build at
+`public/downloads/app-debug.apk`. To refresh it after a new Android Studio
+build, copy `android/app/build/outputs/apk/debug/app-debug.apk` to that path.
+
+For a deployed site, set `VITE_ANDROID_APK_URL` to the public URL where that
+same APK is hosted. This value overrides the local download path.
 
 ## Structure
 

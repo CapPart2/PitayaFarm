@@ -55,6 +55,10 @@ frontend/.env
 frontend/android/**/build/
 frontend/android/app/src/main/assets/public/
 
+# Local Android Studio build copied here so the development system can offer
+# the real APK without committing a multi-gigabyte generated binary.
+frontend/public/downloads/*.apk
+
 # Project data and generated reports not needed for hosting
 Mature Dragon Fruit/
 oversample/
