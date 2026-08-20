@@ -15,6 +15,24 @@ the same database and uploaded files.
 5. Deploy. Once it completes, open **Settings** > **Networking** and generate a
    public Railway domain. That single URL is the web app and its API.
 
+## Publish the real Android APK
+
+The APK is deliberately kept outside Git because generated Android packages can
+be very large. After deploying the code above and adding the `/app/data` volume,
+run this from the project root to upload the exact Android Studio build to that
+persistent volume:
+
+```powershell
+$env:PITAYA_MIGRATION_URL = "https://your-railway-domain.up.railway.app"
+$env:PITAYA_MIGRATION_ADMIN_TOKEN = "your-Railway-ADMIN_TOKEN"
+node scripts/deploy_android_apk.mjs
+```
+
+The operation resumes safely if interrupted. Once it finishes, the landing-page
+button and this public URL download that same APK:
+
+`https://your-railway-domain.up.railway.app/downloads/app-debug.apk`
+
 The first build downloads TensorFlow and yield-detection packages, so it may
 take several minutes. Use at least 2 GB RAM; the $20 Pro plan is suitable.
 

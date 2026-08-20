@@ -272,6 +272,44 @@ def health():
     return jsonify({"status": "healthy", "message": "API is running!"}), 200
 
 
+def _android_apk_path():
+    """Return the current Android Studio APK from persistent or local storage."""
+    configured_path = os.environ.get("PITAYA_ANDROID_APK_PATH")
+    candidates = [
+        configured_path,
+        os.path.join(UPLOAD_FOLDER, "downloads", "app-debug.apk"),
+        os.path.join("frontend", "public", "downloads", "app-debug.apk"),
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+@app.route("/downloads/app-debug.apk", methods=["GET"])
+def download_android_apk():
+    """Download the real Android Studio APK without exposing the data-volume path."""
+    apk_path = _android_apk_path()
+    if not apk_path:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "The Android APK has not been uploaded to this deployment yet.",
+                }
+            ),
+            404,
+        )
+
+    return send_file(
+        apk_path,
+        as_attachment=True,
+        download_name="PITAYA-app-debug.apk",
+        mimetype="application/vnd.android.package-archive",
+        conditional=True,
+    )
+
+
 @app.route("/api/csrf/", methods=["GET"])
 def get_csrf_token():
     """Get CSRF token for form submissions"""
