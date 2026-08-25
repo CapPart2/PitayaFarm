@@ -37,25 +37,40 @@ class ImprovedDiseaseDetection:
         ]
         self.img_size = (224, 224)
 
-        # The classifier was trained with disease classes only, so the app
-        # must keep a confidence floor.  These floors are deliberately below
-        # 85-90%: softmax confidence drops noticeably on real field photos,
-        # especially after cropping a lesion from a large stem.  A low or
-        # ambiguous prediction is still returned as no detection below.
+        # Field photos naturally produce softer probabilities than the clean,
+        # centred training images.  The old 35-45% floors rejected legitimate
+        # diseased stems (including the 26.9% result reported by the app) even
+        # after they had passed the stem and image-quality checks.  Keep a
+        # modest class floor, with stricter values only for classes that are
+        # particularly easy to confuse.
         self.confidence_thresholds = {
-            "Anthracnose": 0.35,
-            "Black Spot": 0.35,
-            "Brown Spot": 0.35,
-            "Root Rot": 0.40,
-            "Soft Rot": 0.35,
-            "Stem Rot": 0.40,
-            "Stem_Canker": 0.45,
-            "Twig Blight": 0.35,
-            "White Spot": 0.35,
+            "Anthracnose": 0.25,
+            "Black Spot": 0.25,
+            "Brown Spot": 0.25,
+            "Root Rot": 0.30,
+            "Soft Rot": 0.25,
+            "Stem Rot": 0.30,
+            "Stem_Canker": 0.35,
+            "Twig Blight": 0.25,
+            "White Spot": 0.25,
         }
 
         # Minimum confidence for any disease detection.
-        self.min_confidence = 0.35
+        self.min_confidence = 0.25
+        # Do not require an unrealistically large softmax gap for a real
+        # field image. Subject validation and the class floor above are the
+        # primary safeguards against unrelated uploads.
+        self.min_confidence_gap = 0.02
+
+    def required_confidence(self, disease_name, quality_score):
+        """Return one consistent confidence floor for every prediction path."""
+        base_threshold = self.confidence_thresholds.get(
+            disease_name, self.min_confidence
+        )
+        # Only genuinely poor images need a small confidence penalty.  This
+        # avoids a second, stricter fallback rule cancelling a valid result.
+        quality_multiplier = 1.0 + max(0.0, 0.35 - float(quality_score)) * 0.10
+        return base_threshold * quality_multiplier
 
     def load_model(self):
         """Load the best available model"""
@@ -504,19 +519,11 @@ class ImprovedDiseaseDetection:
             all_predictions.items(), key=lambda x: x[1], reverse=True
         )
 
-        # Poor images need slightly stronger evidence, but field captures
-        # should not be rejected merely because their quality score is below a
-        # studio-image standard.
-        quality_multiplier = 1.0 + max(0.0, 0.45 - float(quality_score)) * 0.15
-
         candidates = []
         for disease_name, confidence in sorted_predictions[:4]:
-            required_confidence = self.confidence_thresholds.get(
-                disease_name, self.min_confidence
-            ) * quality_multiplier
-
-            if disease_name == "Stem_Canker":
-                required_confidence = max(required_confidence, 0.45)
+            required_confidence = self.required_confidence(
+                disease_name, quality_score
+            )
 
             if confidence < required_confidence:
                 continue
@@ -631,10 +638,6 @@ class ImprovedDiseaseDetection:
         """Enhanced prediction validation with multi-disease support"""
         try:
             all_predictions = self._build_prediction_summary(predictions)
-            # Quality-adjusted threshold multiplier. Better images keep the base
-            # threshold, while lower-quality inputs need slightly stronger confidence.
-            quality_multiplier = 1.0 + max(0.0, 0.7 - float(quality_score)) * 0.5
-
             # Sort predictions by confidence
             sorted_predictions = sorted(
                 all_predictions.items(), key=lambda x: x[1], reverse=True
@@ -648,14 +651,9 @@ class ImprovedDiseaseDetection:
             # Keep only diseases that meet their confidence threshold.
             detected_diseases = []
             for disease_name, confidence in sorted_predictions:
-                required_confidence = self.confidence_thresholds.get(
-                    disease_name, self.min_confidence
-                ) * quality_multiplier
-
-                # Stem Canker is frequently confused with nearby stem blemishes,
-                # so require a slightly stronger signal before surfacing it.
-                if disease_name == "Stem_Canker":
-                    required_confidence = max(required_confidence, 0.45)
+                required_confidence = self.required_confidence(
+                    disease_name, quality_score
+                )
 
                 if confidence < required_confidence:
                     continue
@@ -680,12 +678,15 @@ class ImprovedDiseaseDetection:
 
             # If the best class is clearly above the runner-up and meets its class
             # threshold, return it as a single detection.
-            top_required_confidence = self.confidence_thresholds.get(
-                top_disease_name, self.min_confidence
-            ) * quality_multiplier
+            top_required_confidence = self.required_confidence(
+                top_disease_name, quality_score
+            )
             confidence_gap = top_confidence - second_confidence
 
-            if top_confidence >= top_required_confidence and confidence_gap >= 0.05:
+            if (
+                top_confidence >= top_required_confidence
+                and confidence_gap >= self.min_confidence_gap
+            ):
                 detected_diseases = [
                     {
                         "disease_name": top_disease_name,
@@ -694,10 +695,6 @@ class ImprovedDiseaseDetection:
                     }
                 ]
             else:
-                detected_diseases = []
-
-            # Stem Canker stays stricter than the others.
-            if detected_diseases and top_disease_name == "Stem_Canker" and top_confidence < 0.45:
                 detected_diseases = []
 
             # This is a stem-only detector.  It has no background/healthy class,
@@ -725,10 +722,9 @@ class ImprovedDiseaseDetection:
                     "message": "No disease detection found.",
                     "reason": "low_confidence",
                     "predicted_class": sorted_predictions[0][0],
-                    "required_confidence": self.confidence_thresholds.get(
-                        sorted_predictions[0][0], self.min_confidence
-                    )
-                    * quality_multiplier,
+                    "required_confidence": self.required_confidence(
+                        sorted_predictions[0][0], quality_score
+                    ),
                     "all_predictions": sorted_predictions[:3],
                     "detected_diseases": [],
                 }
@@ -860,12 +856,12 @@ class ImprovedDiseaseDetection:
             ):
                 top_name, top_confidence = whole_sorted_predictions[0]
                 second_confidence = whole_sorted_predictions[1][1]
-                required_confidence = self.confidence_thresholds.get(
-                    top_name, self.min_confidence
-                ) * (1.0 + max(0.0, 0.45 - float(quality["quality_score"])) * 0.15)
+                required_confidence = self.required_confidence(
+                    top_name, quality["quality_score"]
+                )
                 if (
                     top_confidence < required_confidence
-                    or top_confidence - second_confidence < 0.05
+                    or top_confidence - second_confidence < self.min_confidence_gap
                 ):
                     detected_diseases = []
 
