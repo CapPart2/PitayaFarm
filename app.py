@@ -513,7 +513,7 @@ def predict():
                                 "confidence_level": detected_diseases[0]["confidence"]
                                 * 100,
                                 "severity": detected_diseases[0]["severity"],
-                                "message": f"{len(detected_diseases)} diseases detected",
+                                "message": detection["message"],
                                 "multiple_diseases": diseases_info,
                             },
                             "alert": alert,

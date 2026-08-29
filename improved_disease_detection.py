@@ -1109,6 +1109,21 @@ class ImprovedDiseaseDetection:
                     "detected_diseases": detected_diseases,
                 }
 
+                if self.has_reliable_tile_consensus(
+                    primary_disease, quality["quality_score"]
+                ):
+                    # Whole-stem frames can include healthy tissue and several
+                    # lesion types. For a consensus-backed diagnosis, report
+                    # the average confidence from the repeated lesion regions.
+                    result["confidence"] = primary_disease[
+                        "tile_average_confidence"
+                    ]
+                    primary_disease["confidence"] = result["confidence"]
+                    primary_disease["evidence"] = "lesion_consensus"
+                    result["message"] = self._build_detection_message(
+                        primary_disease
+                    )
+
             result["quality_details"] = quality
             result["detected_diseases"] = result.get("detected_diseases", detected_diseases)
             result["subject_validation"] = subject_validation
@@ -1138,8 +1153,9 @@ class ImprovedDiseaseDetection:
         if has_tile_consensus:
             return (
                 f"{disease['disease_name']} detected with "
-                f"{disease['confidence']:.1%} whole-stem confidence. "
-                "Focused lesion regions strongly support this primary diagnosis."
+                f"{disease['confidence']:.1%} lesion-region confidence. "
+                "Repeated focused lesion regions strongly support this "
+                "primary diagnosis."
             )
         return (
             f"{disease['disease_name']} detected with "
