@@ -16,6 +16,9 @@ import cv2
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+OBJECT_GUARD_PATH = "yolov8n.pt"
+OBJECT_GUARD_MODEL = None
+
 
 class ImprovedDiseaseDetection:
     """
@@ -38,6 +41,11 @@ class ImprovedDiseaseDetection:
             "White Spot",
         ]
         self.img_size = (224, 224)
+        self.face_detector = cv2.CascadeClassifier(
+            os.path.join(
+                cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
+            )
+        )
 
         # Field photos naturally produce softer probabilities than the clean,
         # centred training images.  The old 35-45% floors rejected legitimate
@@ -285,6 +293,28 @@ class ImprovedDiseaseDetection:
                 image = image.convert("RGB")
 
             img_array = np.array(image)
+            foreign_subject = self._find_foreign_subject(img_array)
+            if foreign_subject:
+                return {
+                    "is_target": False,
+                    "reason": "unrelated_subject_detected",
+                    "subject": foreign_subject,
+                }
+
+            gray_for_faces = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+            faces = self.face_detector.detectMultiScale(
+                gray_for_faces,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(40, 40),
+            )
+            if len(faces) > 0:
+                return {
+                    "is_target": False,
+                    "reason": "person_detected",
+                    "face_count": int(len(faces)),
+                }
+
             hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
 
             h = hsv[:, :, 0]
@@ -384,6 +414,46 @@ class ImprovedDiseaseDetection:
             logger.error(f"Error validating target subject: {str(e)}")
             # Fail closed for safety: reject when subject validation breaks.
             return {"is_target": False, "reason": "validator_error"}
+
+    def _find_foreign_subject(self, image_rgb):
+        """Find a person or central common object in a stem capture."""
+        global OBJECT_GUARD_MODEL
+        if not os.path.exists(OBJECT_GUARD_PATH):
+            return None
+
+        try:
+            if OBJECT_GUARD_MODEL is None:
+                from ultralytics import YOLO
+
+                OBJECT_GUARD_MODEL = YOLO(OBJECT_GUARD_PATH)
+
+            image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+            result = OBJECT_GUARD_MODEL.predict(
+                image_bgr, conf=0.55, verbose=False
+            )[0]
+            boxes = getattr(result, "boxes", None)
+            if boxes is None or len(boxes) == 0:
+                return None
+
+            height, width = image_rgb.shape[:2]
+            center_left, center_top = width * 0.2, height * 0.2
+            center_right, center_bottom = width * 0.8, height * 0.8
+            names = getattr(OBJECT_GUARD_MODEL, "names", {}) or {}
+            for box, class_id in zip(boxes.xyxy.tolist(), boxes.cls.tolist()):
+                label = str(names.get(int(class_id), "")).strip().lower()
+                left, top, right, bottom = map(float, box)
+                overlaps_center = (
+                    right > center_left
+                    and left < center_right
+                    and bottom > center_top
+                    and top < center_bottom
+                )
+                if label == "person" or overlaps_center:
+                    return label or "unrelated_object"
+        except Exception as exc:
+            logger.warning("Object guard unavailable: %s", exc)
+
+        return None
 
     def extract_stem_region(self, image):
         """Find the centered dragon-fruit stem and remove unrelated background.

@@ -6,6 +6,7 @@ from io import BytesIO
 import tensorflow as tf
 import keras
 import numpy as np
+import cv2
 import os
 import logging
 import json
@@ -79,6 +80,10 @@ MAX_UPLOAD_MIGRATION_CHUNK_BYTES = 25 * 1024 * 1024
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 
+FACE_CASCADE = cv2.CascadeClassifier(
+    os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
+)
+
 
 def allowed_file(filename):
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -121,6 +126,21 @@ def validate_dragonfruit_stem_image(image_path):
     try:
         image = Image.open(image_path).convert("RGB")
         arr = np.array(image, dtype=np.uint8)
+
+        gray_for_faces = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
+        faces = FACE_CASCADE.detectMultiScale(
+            gray_for_faces,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(40, 40),
+        )
+        if len(faces) > 0:
+            return {
+                "valid": False,
+                "document_like": False,
+                "reason": "person_detected",
+                "face_count": int(len(faces)),
+            }
 
         r = arr[:, :, 0].astype(np.int16)
         g = arr[:, :, 1].astype(np.int16)
@@ -398,7 +418,10 @@ def predict():
                         "disease_name": None,
                         "confidence_level": 0,
                         "severity": "none",
-                        "message": "No disease detection found.",
+                        "message": (
+                            "No dragon fruit stem detected. Upload or capture "
+                            "a clear dragon fruit stem image."
+                        ),
                         "reason": "invalid_subject",
                     },
                     "prediction_details": {
@@ -423,7 +446,8 @@ def predict():
                 detection["confidence_level"] = 0
                 detection["severity"] = "none"
                 detection["message"] = (
-                    "No disease detection found."
+                    "No dragon fruit stem detected. Upload or capture a clear "
+                    "dragon fruit stem image."
                 )
                 return jsonify(
                     {
