@@ -6,6 +6,7 @@ import { getPitayaUserScopeHeaders } from './userScope';
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 const DASHBOARD_API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE || '/api/dashboard').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 15_000;
+const IMAGE_UPLOAD_TIMEOUT_MS = 3 * 60 * 1000;
 
 // Capacitor serves the bundled UI from capacitor://localhost. Relative URLs
 // therefore never reach Railway in the APK. Keep all backend URLs absolute
@@ -248,17 +249,36 @@ const predictionApi = {
     const formData = new FormData();
     formData.append('file', file, file?.name || 'upload.jpg');
 
-    // Direct fetch without credentials for Flask API
-    const response = await fetchWithTimeout(apiUrl('/predict'), {
-      method: 'POST',
-      body: formData,
-      headers: getPitayaUserScopeHeaders(),
-      // Don't set Content-Type header for FormData - browser sets it automatically with boundary
-    });
+    let response;
+    try {
+      // Model startup and a high-resolution phone photo can take longer than
+      // routine API calls. Do not apply the normal 15-second UI timeout here.
+      response = await fetchWithTimeout(
+        apiUrl('/predict'),
+        {
+          method: 'POST',
+          body: formData,
+          headers: getPitayaUserScopeHeaders(),
+          // Don't set Content-Type header for FormData - browser sets it automatically with boundary
+        },
+        IMAGE_UPLOAD_TIMEOUT_MS,
+      );
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw new Error('Disease detection timed out. Check your internet connection and try a smaller, clear image.')
+      }
+      if (error instanceof TypeError) {
+        throw new Error('Disease upload was interrupted. Check your internet connection, then try again.')
+      }
+      throw error
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      const error = new Error(errorData?.error || `API Error: ${response.status} ${response.statusText}`);
+      error.status = response.status;
+      error.data = errorData;
+      throw error;
     }
 
     return await response.json();
