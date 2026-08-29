@@ -97,6 +97,7 @@ export default function DiseaseDetection() {
               symptoms: response.detection.symptoms,
               causes: response.detection.causes,
               treatment: response.detection.treatment,
+              diagnosisMessage: response.detection.message,
               affectedPart: 'Leaf/Stem',
               recommendation: response.detection.treatment?.slice(0, 2).join(' ') || 'Consult agricultural specialist',
               alert: response.alert,
@@ -597,6 +598,11 @@ export default function DiseaseDetection() {
                               <div className="flex-1 min-w-0">
                                 <p className="font-display font-bold text-xl text-gray-900 dark:text-gray-100">{result.diseaseName}</p>
                                 <p className="text-sm text-gray-500 dark:text-gray-300 mt-0.5">{result.affectedPart}</p>
+                                {result.diagnosisMessage && (
+                                  <p className="mt-2 text-sm text-gray-700 dark:text-gray-200 leading-relaxed">
+                                    {result.diagnosisMessage}
+                                  </p>
+                                )}
                               </div>
                               <SeverityBadge severity={result.severity} />
                             </div>

@@ -64,6 +64,9 @@ class ImprovedDiseaseDetection:
         self.min_confidence = 0.25
         self.primary_confidence_threshold = 0.55
         self.primary_confidence_gap = 0.10
+        self.tile_consensus_count = 6
+        self.tile_consensus_confidence = 0.70
+        self.tile_consensus_average = 0.60
         # The classifier was trained only on disease classes, so a field image
         # can distribute probability across similar diseases.  A lower score
         # is useful only when independent, overlapping stem tiles agree.
@@ -106,6 +109,21 @@ class ImprovedDiseaseDetection:
             top_confidence >= required_confidence
             and top_confidence - second_confidence
             >= self.primary_confidence_gap
+        )
+
+    def has_reliable_tile_consensus(self, disease, quality_score):
+        """Accept a mixed-symptom image only with strong lesion-tile support."""
+        whole_confidence = disease.get("whole_image_confidence") or 0.0
+        required_confidence = self.required_confidence(
+            disease["disease_name"], quality_score
+        )
+        return (
+            whole_confidence >= required_confidence
+            and disease.get("tile_support", 0) >= self.tile_consensus_count
+            and (disease.get("tile_confidence") or 0.0)
+            >= self.tile_consensus_confidence
+            and (disease.get("tile_average_confidence") or 0.0)
+            >= self.tile_consensus_average
         )
 
     def load_model(self):
@@ -680,6 +698,7 @@ class ImprovedDiseaseDetection:
                         "tile_support": tile_support,
                         "whole_image_confidence": whole_confidence,
                         "tile_confidence": tile_confidence,
+                        "tile_average_confidence": tile_average,
                         "evidence": "whole_stem",
                     }
                 )
@@ -706,6 +725,7 @@ class ImprovedDiseaseDetection:
                         "tile_support": tile_support,
                         "whole_image_confidence": None,
                         "tile_confidence": tile_confidence,
+                        "tile_average_confidence": tile_average,
                         "evidence": "two_tiles",
                     }
                 )
@@ -961,8 +981,14 @@ class ImprovedDiseaseDetection:
                 and detected_diseases[0].get("evidence") == "whole_stem"
                 and len(whole_sorted_predictions) >= 2
             ):
-                if not self.is_reliable_primary(
-                    whole_image_predictions, quality["quality_score"]
+                primary_disease = detected_diseases[0]
+                if not (
+                    self.is_reliable_primary(
+                        whole_image_predictions, quality["quality_score"]
+                    )
+                    or self.has_reliable_tile_consensus(
+                        primary_disease, quality["quality_score"]
+                    )
                 ):
                     detected_diseases = []
 
@@ -981,15 +1007,8 @@ class ImprovedDiseaseDetection:
                     "disease_name": primary_disease["disease_name"],
                     "confidence": primary_disease["confidence"],
                     "severity": primary_disease["severity"],
-                    "message": (
-                        f"{len(detected_diseases)} diseases detected - primary: "
-                        f"{primary_disease['disease_name']}"
-                    ),
-                    "reason": (
-                        "multiple_diseases"
-                        if len(detected_diseases) > 1
-                        else "disease_detected"
-                    ),
+                    "message": self._build_detection_message(primary_disease),
+                    "reason": "disease_detected",
                     "all_predictions": whole_sorted_predictions[:5],
                     "detected_diseases": detected_diseases,
                 }
@@ -1010,6 +1029,26 @@ class ImprovedDiseaseDetection:
         except Exception as e:
             logger.error(f"Error predicting disease: {str(e)}")
             return {"success": False, "error": str(e)}
+
+    def _build_detection_message(self, disease):
+        """Describe whether the main diagnosis has focused-lesion support."""
+        has_tile_consensus = (
+            disease.get("tile_support", 0) >= self.tile_consensus_count
+            and (disease.get("tile_confidence") or 0.0)
+            >= self.tile_consensus_confidence
+            and (disease.get("tile_average_confidence") or 0.0)
+            >= self.tile_consensus_average
+        )
+        if has_tile_consensus:
+            return (
+                f"{disease['disease_name']} detected with "
+                f"{disease['confidence']:.1%} whole-stem confidence. "
+                "Focused lesion regions strongly support this primary diagnosis."
+            )
+        return (
+            f"{disease['disease_name']} detected with "
+            f"{disease['confidence']:.1%} confidence."
+        )
 
     def get_disease_severity(self, disease_name):
         """Get disease severity"""
