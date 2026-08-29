@@ -103,7 +103,7 @@ NO_MATURE_DETECTION_MESSAGE = "No mature detection found."
 # A one-class detector must be conservative: it has no explicit "person" or
 # "background" label to correct a low-confidence guess.  Do not permit clients
 # to lower this threshold for records that may be saved as yield data.
-MIN_MATURE_CONFIDENCE = 0.55
+MIN_MATURE_CONFIDENCE = 0.65
 
 
 def mature_confidence_threshold(
@@ -1382,7 +1382,8 @@ def count_mature_in_video(
                     for detection in detect_focused_mature_fruits(
                         frame, image_mode=False
                     )
-                    if is_precise_video_mature_fruit(frame, detection)
+                    if float(detection.get("confidence", 0.0)) >= conf
+                    and is_precise_video_mature_fruit(frame, detection)
                 ]
                 frame_h, frame_w = frame.shape[:2]
                 max_distance = max(32.0, float(np.hypot(frame_w, frame_h)) * 0.10)
@@ -1676,7 +1677,8 @@ def annotate_video_and_count(
             focused_detections = [
                 detection
                 for detection in detect_focused_mature_fruits(frame, image_mode=False)
-                if is_precise_video_mature_fruit(frame, detection)
+                if float(detection.get("confidence", 0.0)) >= conf
+                and is_precise_video_mature_fruit(frame, detection)
             ]
             mature_boxes = [
                 (
@@ -3794,7 +3796,7 @@ def yield_image_detect():
             # The mature-colour, fruit-shape, plant-context and two-frame
             # gates below keep this lower model threshold from counting a
             # person, unrelated object, or plain background.
-            minimum=0.40 if is_live_capture else MIN_MATURE_CONFIDENCE,
+            minimum=0.60 if is_live_capture else MIN_MATURE_CONFIDENCE,
         )
         method = (request.form.get("method") or "color").lower()
         if method not in {"hybrid", "color", "yolo"}:
@@ -3829,7 +3831,8 @@ def yield_image_detect():
                 for detection in detect_focused_mature_fruits(
                     frame_bgr, image_mode=True
                 )
-                if is_precise_image_mature_fruit(frame_bgr, detection)
+                if float(detection.get("confidence", 0.0)) >= conf
+                and is_precise_image_mature_fruit(frame_bgr, detection)
             ]
 
         # The colour detector is reliable for clear, close fruit but loses

@@ -189,7 +189,7 @@ export default function YieldPrediction() {
     e.target.value = ''
     try {
       setVideoUploading(true)
-      const resp = await uploadYieldVideo(file, 0.55)
+      const resp = await uploadYieldVideo(file, 0.70)
       if (resp && resp.success) {
         setVideoCountResult(resp.data)
       } else {
@@ -288,7 +288,7 @@ export default function YieldPrediction() {
           if (!blob) return
 
           const file = new File([blob], 'live_frame.jpg', { type: 'image/jpeg' })
-          const resp = await uploadYieldImage(file, 0.40, 'live')
+          const resp = await uploadYieldImage(file, 0.60, 'live')
           if (!resp || !resp.success) return
 
           const detections = Array.isArray(resp.data?.detections) ? resp.data.detections : []
@@ -429,7 +429,7 @@ export default function YieldPrediction() {
     try {
       setLoadingDetect(true)
       setDetectionResult(null)
-      const resp = await uploadYieldImage(file, 0.55)
+      const resp = await uploadYieldImage(file, 0.70)
       if (resp && resp.success) {
         setDetectionResult(resp.data)
       } else {

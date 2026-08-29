@@ -188,7 +188,7 @@ export async function saveYieldToChart(matureFruits, location = 'Field', season 
 }
 
 // Upload an image for yield detection (returns detections and annotated image)
-export async function uploadYieldImage(file, conf = 0.55, detectionMode = 'photo') {
+export async function uploadYieldImage(file, conf = 0.65, detectionMode = 'photo') {
   try {
     const form = new FormData();
     form.append('image', file);
@@ -219,7 +219,7 @@ export async function uploadYieldImage(file, conf = 0.55, detectionMode = 'photo
 }
 
 // Upload a video for yield detection (counts mature fruits in the whole video)
-export async function uploadYieldVideo(videoFile, conf = 0.55) {
+export async function uploadYieldVideo(videoFile, conf = 0.65) {
   try {
     const form = new FormData();
     form.append('video', videoFile);
