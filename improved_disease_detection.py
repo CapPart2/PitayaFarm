@@ -879,35 +879,35 @@ class ImprovedDiseaseDetection:
             if disease["disease_name"] == primary["disease_name"]:
                 continue
 
-            secondary_tile_count = disease.get("tile_support", 0)
-            secondary_tile_confidence = disease.get("tile_confidence") or 0.0
-            secondary_tile_average = disease.get("tile_average_confidence") or 0.0
-            secondary_whole_confidence = disease.get("whole_image_confidence") or 0.0
+            sec_tile_count = disease.get("tile_support", 0)
+            sec_tile_conf = disease.get("tile_confidence") or 0.0
+            sec_tile_avg = disease.get("tile_average_confidence") or 0.0
+            sec_whole_conf = disease.get("whole_image_confidence")
 
-            # A second label requires a separate, strongly supported lesion
-            # pattern. This avoids promoting weak tile-edge artifacts to a
-            # false Brown Spot diagnosis beside the primary disease.
-            if (
-                secondary_tile_count < self.secondary_tile_count
-                or secondary_tile_confidence < self.secondary_tile_confidence
-                or secondary_tile_average < self.secondary_tile_average
-            ):
+            # Avoid false co-infections caused by tile edges on necrotic lesions.
+            # If the primary disease is overwhelmingly dominant across tiles,
+            # minor runner-up tile clusters are lesion boundary artifacts.
+            if primary_tile_count >= 10 and sec_tile_count < 5:
                 continue
-            if (
-                primary_tile_count >= 10
-                and secondary_tile_count * 2 < primary_tile_count
-                and secondary_whole_confidence
-                < self.required_confidence(disease["disease_name"], 1.0)
-            ):
+            if primary_tile_count >= 3 * sec_tile_count and sec_whole_conf is None:
                 continue
 
-            additional.append(
-                {
-                    **disease,
-                    "confidence": secondary_tile_average,
-                    "evidence": "localized_tiles",
-                }
-            )
+            # A secondary disease must be localised repeatedly and with a
+            # strong score. Whole-image runner-up probabilities never qualify
+            # by themselves because the model has correlated disease labels.
+            min_tile_count = self.secondary_tile_count if sec_whole_conf is not None else self.secondary_tile_count + 1
+            if (
+                sec_tile_count >= min_tile_count
+                and sec_tile_conf >= self.secondary_tile_confidence
+                and sec_tile_avg >= self.secondary_tile_average
+            ):
+                additional.append(
+                    {
+                        **disease,
+                        "confidence": sec_tile_avg,
+                        "evidence": "localized_tiles",
+                    }
+                )
 
         return [primary, *additional[:2]]
 

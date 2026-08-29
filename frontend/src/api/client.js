@@ -6,7 +6,6 @@ import { getPitayaUserScopeHeaders } from './userScope';
 const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
 const DASHBOARD_API_BASE = (import.meta.env.VITE_DASHBOARD_API_BASE || '/api/dashboard').replace(/\/$/, '');
 const REQUEST_TIMEOUT_MS = 15_000;
-const ML_REQUEST_TIMEOUT_MS = 90_000;
 
 // Capacitor serves the bundled UI from capacitor://localhost. Relative URLs
 // therefore never reach Railway in the APK. Keep all backend URLs absolute
@@ -29,11 +28,6 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = REQUEST_TIMEOUT_M
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...options, signal: controller.signal });
-  } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error('The image is still being processed. Check your internet connection and try again with a clear, smaller photo.')
-    }
-    throw error;
   } finally {
     window.clearTimeout(timeoutId);
   }
@@ -255,16 +249,12 @@ const predictionApi = {
     formData.append('file', file, file?.name || 'upload.jpg');
 
     // Direct fetch without credentials for Flask API
-    const response = await fetchWithTimeout(
-      apiUrl('/predict'),
-      {
-        method: 'POST',
-        body: formData,
-        headers: getPitayaUserScopeHeaders(),
-        // Don't set Content-Type header for FormData - browser sets it automatically with boundary
-      },
-      ML_REQUEST_TIMEOUT_MS,
-    );
+    const response = await fetchWithTimeout(apiUrl('/predict'), {
+      method: 'POST',
+      body: formData,
+      headers: getPitayaUserScopeHeaders(),
+      // Don't set Content-Type header for FormData - browser sets it automatically with boundary
+    });
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
