@@ -730,8 +730,8 @@ def is_countable_mature_dragonfruit(
     # ripe colour *and* visible bracts before it can change the yield total.
     if min(width, height) < 40 and (
         not has_bracts
-        or mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.22
-        or ripe_red_ratio < 0.18
+        or mature_core_ratio(frame_bgr, x1, y1, width, height) < 0.16
+        or ripe_red_ratio < 0.12
     ):
         return False
 
@@ -775,14 +775,16 @@ def is_hsv_fruit_candidate(
     # than for the moving-video flow, so those visible fruits disappeared
     # before the colour, shape, and cactus-context checks could assess them.
     # Keep video's existing noise guard, while allowing a photo candidate down
-    # to 20 px only when it also passes all of those later checks.
+    # to 14 px only when it also passes all of those later checks. Orchard
+    # photos contain ripe fruit far from the camera, where the exposed pink
+    # body can be smaller than the previous 20 px floor.
     min_side = (
-        max(20, int(min(frame_width, frame_height) * 0.026))
+        max(14, int(min(frame_width, frame_height) * 0.018))
         if image_mode
         else max(24, int(min(frame_width, frame_height) * 0.03))
     )
     min_box_area = (
-        max(500.0, frame_area * 0.00055)
+        max(220.0, frame_area * 0.00025)
         if image_mode
         else max(700.0, frame_area * 0.00075)
     )
@@ -892,7 +894,10 @@ def detect_occluded_mature_core_boxes(frame_bgr, rejected_regions):
         core_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
 
-    min_core_area = max(400.0, frame_area * 0.00035)
+    # A distant fruit may expose only a small ripe-red core. The later bract,
+    # context, and confidence checks still prevent that core from becoming a
+    # count unless it belongs to a plausible fruit.
+    min_core_area = max(150.0, frame_area * 0.00015)
     boxes = []
     for contour in contours:
         core_area = float(cv2.contourArea(contour))
@@ -923,8 +928,8 @@ def detect_occluded_mature_core_boxes(frame_bgr, rejected_regions):
         # A ripe core is only part of the fruit. Expand from its centre to a
         # fruit-sized proposal, while leaving enough separation for neighbouring
         # fruits to remain distinct.
-        proposal_width = max(64, int(round(width * 3.0)))
-        proposal_height = max(76, int(round(height * 3.0)))
+        proposal_width = max(36, int(round(width * 2.2)))
+        proposal_height = max(42, int(round(height * 2.4)))
         x1 = max(0, int(round(core_center_x - proposal_width / 2.0)))
         y1 = max(0, int(round(core_center_y - proposal_height / 2.0)))
         x2 = min(frame_width, x1 + proposal_width)
