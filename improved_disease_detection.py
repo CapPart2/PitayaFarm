@@ -72,21 +72,19 @@ class ImprovedDiseaseDetection:
         self.min_confidence = 0.25
         self.primary_confidence_threshold = 0.55
         self.primary_confidence_gap = 0.10
-        self.tile_consensus_count = 6
+        self.tile_consensus_count = 5
         self.tile_consensus_confidence = 0.70
-        self.tile_consensus_average = 0.60
-        self.secondary_tile_count = 3
-        self.secondary_tile_confidence = 0.75
-        self.secondary_tile_average = 0.65
-        # The classifier was trained only on disease classes, so a field image
-        # can distribute probability across similar diseases.  A lower score
-        # is useful only when independent, overlapping stem tiles agree.
-        self.tile_confirmation_confidence = 0.18
-        self.tile_confirmation_count = 2
+        self.tile_consensus_average = 0.55
+        self.secondary_tile_count = 4
+        self.secondary_tile_confidence = 0.80
+        self.secondary_tile_average = 0.70
+        # Tile candidates should be confident predictions, not low-probability noise.
+        self.tile_confirmation_confidence = 0.45
+        self.tile_confirmation_count = 3
         # A second diagnosis must be substantially more certain than a
         # runner-up softmax score from the same image. It is considered only
         # when focused stem tiles repeatedly select it.
-        self.multi_disease_confidence = 0.60
+        self.multi_disease_confidence = 0.65
 
     def required_confidence(self, disease_name, quality_score):
         """Return one consistent confidence floor for every prediction path."""
@@ -876,24 +874,37 @@ class ImprovedDiseaseDetection:
         else:
             primary = scored_diseases[0]
         additional = []
+        primary_tile_count = primary.get("tile_support", 0)
         for disease in scored_diseases:
             if disease["disease_name"] == primary["disease_name"]:
+                continue
+
+            sec_tile_count = disease.get("tile_support", 0)
+            sec_tile_conf = disease.get("tile_confidence") or 0.0
+            sec_tile_avg = disease.get("tile_average_confidence") or 0.0
+            sec_whole_conf = disease.get("whole_image_confidence")
+
+            # Avoid false co-infections caused by tile edges on necrotic lesions.
+            # If the primary disease is overwhelmingly dominant across tiles,
+            # minor runner-up tile clusters are lesion boundary artifacts.
+            if primary_tile_count >= 10 and sec_tile_count < 5:
+                continue
+            if primary_tile_count >= 3 * sec_tile_count and sec_whole_conf is None:
                 continue
 
             # A secondary disease must be localised repeatedly and with a
             # strong score. Whole-image runner-up probabilities never qualify
             # by themselves because the model has correlated disease labels.
+            min_tile_count = self.secondary_tile_count if sec_whole_conf is not None else self.secondary_tile_count + 1
             if (
-                disease.get("tile_support", 0) >= self.secondary_tile_count
-                and (disease.get("tile_confidence") or 0.0)
-                >= self.secondary_tile_confidence
-                and (disease.get("tile_average_confidence") or 0.0)
-                >= self.secondary_tile_average
+                sec_tile_count >= min_tile_count
+                and sec_tile_conf >= self.secondary_tile_confidence
+                and sec_tile_avg >= self.secondary_tile_average
             ):
                 additional.append(
                     {
                         **disease,
-                        "confidence": disease["tile_average_confidence"],
+                        "confidence": sec_tile_avg,
                         "evidence": "localized_tiles",
                     }
                 )
