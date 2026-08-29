@@ -843,36 +843,19 @@ class ImprovedDiseaseDetection:
         if not scored_diseases:
             return []
 
-        # Prefer a complete-stem diagnosis as the primary result, unless a
-        # dominant localized lesion candidate has overwhelming tile consensus
-        # while the whole-stem prediction is weak or diluted.
+        # A disease model's tile predictions are useful supporting evidence,
+        # but cannot establish the primary diagnosis by themselves. Lesion
+        # edges and background details can receive a high but incorrect tile
+        # label. Keep the complete-stem result as the diagnosis, and use tile
+        # agreement only to strengthen its confidence.
         whole_stem_diseases = [
             disease for disease in scored_diseases
             if disease.get("evidence") == "whole_stem"
         ]
-        dominant_tile_disease = next(
-            (
-                d for d in scored_diseases
-                if d.get("evidence") != "whole_stem"
-                and d.get("tile_support", 0) >= 3
-                and (d.get("tile_average_confidence") or 0.0) >= 0.58
-            ),
-            None,
-        )
+        if not whole_stem_diseases:
+            return []
 
-        if dominant_tile_disease and whole_stem_diseases:
-            whole_primary = whole_stem_diseases[0]
-            if (
-                whole_primary.get("tile_support", 0) <= 1
-                or (whole_primary.get("confidence") or 0.0) < 0.40
-            ) and dominant_tile_disease.get("tile_support", 0) >= whole_primary.get("tile_support", 0) + 2:
-                primary = dominant_tile_disease
-            else:
-                primary = whole_primary
-        elif whole_stem_diseases:
-            primary = whole_stem_diseases[0]
-        else:
-            primary = scored_diseases[0]
+        primary = whole_stem_diseases[0]
         additional = []
         primary_tile_count = primary.get("tile_support", 0)
         for disease in scored_diseases:
@@ -892,10 +875,14 @@ class ImprovedDiseaseDetection:
             if primary_tile_count >= 3 * sec_tile_count and sec_whole_conf is None:
                 continue
 
-            # A secondary disease must be localised repeatedly and with a
-            # strong score. Whole-image runner-up probabilities never qualify
-            # by themselves because the model has correlated disease labels.
-            min_tile_count = self.secondary_tile_count if sec_whole_conf is not None else self.secondary_tile_count + 1
+            # A secondary disease must be visible in the whole stem and in
+            # repeated focused regions. Tile labels alone are often produced
+            # by edges of the primary lesion and do not establish a second
+            # disease.
+            if sec_whole_conf is None:
+                continue
+
+            min_tile_count = self.secondary_tile_count
             if (
                 sec_tile_count >= min_tile_count
                 and sec_tile_conf >= self.secondary_tile_confidence
