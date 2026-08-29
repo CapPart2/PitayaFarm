@@ -451,6 +451,8 @@ def predict():
                             "disease_name": disease_data["disease_name"],
                             "confidence_level": disease_data["confidence"] * 100,
                             "severity": disease_data["severity"],
+                            "evidence": disease_data.get("evidence", "whole_stem"),
+                            "tile_support": disease_data.get("tile_support", 0),
                             "symptoms": (
                                 disease_info.get("symptoms", []) if disease_info else []
                             ),

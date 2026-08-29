@@ -67,6 +67,9 @@ class ImprovedDiseaseDetection:
         self.tile_consensus_count = 6
         self.tile_consensus_confidence = 0.70
         self.tile_consensus_average = 0.60
+        self.secondary_tile_count = 3
+        self.secondary_tile_confidence = 0.75
+        self.secondary_tile_average = 0.65
         # The classifier was trained only on disease classes, so a field image
         # can distribute probability across similar diseases.  A lower score
         # is useful only when independent, overlapping stem tiles agree.
@@ -748,11 +751,30 @@ class ImprovedDiseaseDetection:
         primary = (
             whole_stem_diseases[0] if whole_stem_diseases else scored_diseases[0]
         )
-        # This classifier is trained with exactly one label per image. Tile
-        # predictions can corroborate the primary label, but cannot prove a
-        # second disease. Returning only the best diagnosis avoids presenting
-        # correlated runner-up probabilities as multiple infections.
-        return [primary]
+        additional = []
+        for disease in scored_diseases:
+            if disease["disease_name"] == primary["disease_name"]:
+                continue
+
+            # A secondary disease must be localised repeatedly and with a
+            # strong score. Whole-image runner-up probabilities never qualify
+            # by themselves because the model has correlated disease labels.
+            if (
+                disease.get("tile_support", 0) >= self.secondary_tile_count
+                and (disease.get("tile_confidence") or 0.0)
+                >= self.secondary_tile_confidence
+                and (disease.get("tile_average_confidence") or 0.0)
+                >= self.secondary_tile_average
+            ):
+                additional.append(
+                    {
+                        **disease,
+                        "confidence": disease["tile_average_confidence"],
+                        "evidence": "localized_tiles",
+                    }
+                )
+
+        return [primary, *additional[:2]]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
@@ -1008,7 +1030,11 @@ class ImprovedDiseaseDetection:
                     "confidence": primary_disease["confidence"],
                     "severity": primary_disease["severity"],
                     "message": self._build_detection_message(primary_disease),
-                    "reason": "disease_detected",
+                    "reason": (
+                        "multiple_diseases"
+                        if len(detected_diseases) > 1
+                        else "disease_detected"
+                    ),
                     "all_predictions": whole_sorted_predictions[:5],
                     "detected_diseases": detected_diseases,
                 }

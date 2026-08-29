@@ -518,6 +518,11 @@ export default function DiseaseDetection() {
                                       <p className="text-xs text-gray-500 dark:text-gray-400">
                                         {typeof disease.confidence_level === 'number' ? disease.confidence_level.toFixed(1) : parseFloat(disease.confidence_level || 0).toFixed(1)}% confidence
                                       </p>
+                                      <p className="mt-1 text-xs text-gray-600 dark:text-gray-300">
+                                        {disease.evidence === 'localized_tiles'
+                                          ? `Confirmed in ${disease.tile_support} focused lesion regions`
+                                          : 'Primary whole-stem diagnosis'}
+                                      </p>
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-2">
