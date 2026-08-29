@@ -68,10 +68,10 @@ class ImprovedDiseaseDetection:
         # is useful only when independent, overlapping stem tiles agree.
         self.tile_confirmation_confidence = 0.18
         self.tile_confirmation_count = 2
-        # The current field model commonly assigns 25-40% to a visible
-        # lesion. A second disease is therefore accepted at 30% only after
-        # two focused, overlapping stem tiles independently select it.
-        self.multi_disease_confidence = 0.30
+        # A second diagnosis must be substantially more certain than a
+        # runner-up softmax score from the same image. It is considered only
+        # when focused stem tiles repeatedly select it.
+        self.multi_disease_confidence = 0.60
 
     def required_confidence(self, disease_name, quality_score):
         """Return one consistent confidence floor for every prediction path."""
@@ -706,7 +706,8 @@ class ImprovedDiseaseDetection:
         additional = [
             disease for disease in scored_diseases
             if disease["disease_name"] != primary["disease_name"]
-            and disease.get("evidence") == "two_tiles"
+            and disease.get("tile_support", 0) >= self.tile_confirmation_count
+            and disease.get("tile_confidence", 0) >= self.multi_disease_confidence
             and disease["confidence"] >= self.multi_disease_confidence
         ]
         return [primary, *additional[:2]]
