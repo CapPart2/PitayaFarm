@@ -873,13 +873,43 @@ class ImprovedDiseaseDetection:
             primary = whole_stem_diseases[0]
         else:
             primary = scored_diseases[0]
-        # Each source image in oversample/Leaf belongs to exactly one class.
-        # The deployed model consequently produces a mutually exclusive
-        # diagnosis, not a multi-label disease assessment. Overlapping crop
-        # tiles can label parts of one lesion as another disease, so exposing
-        # secondary tile labels creates false Brown Spot/Soft Rot reports.
-        # Return only the diagnosis with the strongest whole-stem/tile evidence.
-        return [primary]
+        additional = []
+        primary_tile_count = primary.get("tile_support", 0)
+        for disease in scored_diseases:
+            if disease["disease_name"] == primary["disease_name"]:
+                continue
+
+            secondary_tile_count = disease.get("tile_support", 0)
+            secondary_tile_confidence = disease.get("tile_confidence") or 0.0
+            secondary_tile_average = disease.get("tile_average_confidence") or 0.0
+            secondary_whole_confidence = disease.get("whole_image_confidence") or 0.0
+
+            # A second label requires a separate, strongly supported lesion
+            # pattern. This avoids promoting weak tile-edge artifacts to a
+            # false Brown Spot diagnosis beside the primary disease.
+            if (
+                secondary_tile_count < self.secondary_tile_count
+                or secondary_tile_confidence < self.secondary_tile_confidence
+                or secondary_tile_average < self.secondary_tile_average
+            ):
+                continue
+            if (
+                primary_tile_count >= 10
+                and secondary_tile_count * 2 < primary_tile_count
+                and secondary_whole_confidence
+                < self.required_confidence(disease["disease_name"], 1.0)
+            ):
+                continue
+
+            additional.append(
+                {
+                    **disease,
+                    "confidence": secondary_tile_average,
+                    "evidence": "localized_tiles",
+                }
+            )
+
+        return [primary, *additional[:2]]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
