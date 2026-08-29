@@ -583,7 +583,15 @@ def is_precise_video_mature_fruit(frame_bgr, detection) -> bool:
     if center_y >= frame_height * 0.74 and not attached_to_stem:
         return False
 
-    return attached_to_stem
+    if attached_to_stem:
+        return True
+
+    # A side-on or close camera angle often crops the supporting arm above a
+    # fruit. The preceding countable-fruit check has already required ripe
+    # colour, bracts, and nearby cactus tissue; permit this non-ground case
+    # only with a strong visible ripe core so a red background region cannot
+    # bypass the attachment check.
+    return mature_core_ratio(frame_bgr, x1, y1, width, height) >= 0.20
 
 
 def is_precise_image_mature_fruit(frame_bgr, detection) -> bool:
@@ -1369,7 +1377,7 @@ def count_mature_in_video(
         # recording. Require roughly a quarter second of consecutive valid
         # observations before a detection may change the count.
         min_confirm_hits = max(5, int(round(fps * 0.25)))
-        max_missed_frames = 120
+        max_missed_frames = max(24, int(round(fps * 3.0)))
         try:
             while True:
                 ok, frame = cap.read()
@@ -1391,7 +1399,7 @@ def count_mature_in_video(
                     and is_precise_video_mature_fruit(frame, detection)
                 ]
                 frame_h, frame_w = frame.shape[:2]
-                max_distance = max(32.0, float(np.hypot(frame_w, frame_h)) * 0.10)
+                max_distance = max(24.0, float(np.hypot(frame_w, frame_h)) * 0.07)
                 matched_ids = set()
 
                 for detection in detections:
@@ -1637,12 +1645,13 @@ def annotate_video_and_count(
         next_track_id = 1
         active_tracks = []
         unique_ids = set()
-        # Keep confirmed identities for the practical recording window. A
-        # fruit revisited after the camera pans away must reconnect to its
-        # existing identity instead of becoming another yield count.
-        track_max_missed = max(8640, int(round(fps * 180.0)))
+        # Keep an identity through a short autofocus or occlusion gap, but do
+        # not let it claim a different fruit after the camera has panned to a
+        # new part of the plant. The former three-minute window caused distant
+        # fruits to merge into one track in uploaded videos.
+        track_max_missed = max(24, int(round(fps * 3.0)))
         display_hold_frames = max(6, int(round(fps * 0.25)))
-        min_confirm_hits = 3
+        min_confirm_hits = max(5, int(round(fps * 0.25)))
 
         while True:
             ret, frame = cap.read()
@@ -1758,24 +1767,24 @@ def annotate_video_and_count(
                     if size_ratio < min_size_ratio:
                         continue
                     if track.get("counted"):
-                        # Prefer reconnecting an already counted fruit after
-                        # a camera pan. This intentionally favours avoiding a
-                        # duplicate count over creating a new identity.
+                        # A counted fruit can reconnect after a brief blur or
+                        # occlusion, but a broad camera-pan match would merge
+                        # two different fruits into one identity.
                         allowed_distance = max(
-                            48.0,
+                            32.0,
                             min(
-                                diag * 0.42,
-                                1.40 * max(current_diag, previous_diag)
-                                + 18.0 * frame_gap,
+                                diag * 0.18,
+                                1.05 * max(current_diag, previous_diag)
+                                + 12.0 * frame_gap,
                             ),
                         )
                     else:
                         allowed_distance = max(
                             24.0,
                             min(
-                                diag * 0.14,
-                                0.85 * max(current_diag, previous_diag)
-                                + 10.0 * frame_gap,
+                                diag * 0.10,
+                                0.75 * max(current_diag, previous_diag)
+                                + 8.0 * frame_gap,
                             ),
                         )
                     if iou < 0.08 and dist > allowed_distance:
