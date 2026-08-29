@@ -72,15 +72,15 @@ class ImprovedDiseaseDetection:
         self.min_confidence = 0.25
         self.primary_confidence_threshold = 0.55
         self.primary_confidence_gap = 0.10
-        self.tile_consensus_count = 5
+        self.tile_consensus_count = 3
         self.tile_consensus_confidence = 0.70
         self.tile_consensus_average = 0.55
-        self.secondary_tile_count = 4
+        self.secondary_tile_count = 3
         self.secondary_tile_confidence = 0.80
         self.secondary_tile_average = 0.70
         # Tile candidates should be confident predictions, not low-probability noise.
         self.tile_confirmation_confidence = 0.45
-        self.tile_confirmation_count = 3
+        self.tile_confirmation_count = 2
         # A second diagnosis must be substantially more certain than a
         # runner-up softmax score from the same image. It is considered only
         # when focused stem tiles repeatedly select it.
@@ -670,8 +670,11 @@ class ImprovedDiseaseDetection:
             if min_dimension <= self.img_size[0]:
                 return [(0, image)]
 
-            tile_size = min(max(int(min_dimension * 0.55), 128), min_dimension)
-            stride = max(int(tile_size * 0.4), 48)
+            tile_size = min(max(int(min_dimension * 0.48), 128), min_dimension)
+            # Adjacent evidence tiles must be mostly separate. A dense,
+            # overlapping grid lets one lesion dominate many predictions and
+            # can turn a false label into an apparent co-infection.
+            stride = max(int(tile_size * 0.85), 48)
 
             x_positions = list(range(0, max(width - tile_size, 0) + 1, stride))
             y_positions = list(range(0, max(height - tile_size, 0) + 1, stride))
@@ -875,11 +878,18 @@ class ImprovedDiseaseDetection:
             if primary_tile_count >= 3 * sec_tile_count and sec_whole_conf is None:
                 continue
 
-            # A secondary disease must be visible in the whole stem and in
-            # repeated focused regions. Tile labels alone are often produced
-            # by edges of the primary lesion and do not establish a second
-            # disease.
-            if sec_whole_conf is None:
+            # Whole-stem softmax scores are diluted when two diseases are in
+            # one photo, so they cannot be a hard requirement. A secondary
+            # result instead needs very strong agreement from independent
+            # tiles. One weak whole-stem runner-up is not enough either.
+            if (
+                sec_whole_conf is None
+                and (
+                    sec_tile_count < self.secondary_tile_count
+                    or sec_tile_conf < self.secondary_tile_confidence
+                    or sec_tile_avg < self.secondary_tile_average
+                )
+            ):
                 continue
 
             min_tile_count = self.secondary_tile_count
