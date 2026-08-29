@@ -298,6 +298,24 @@ def mature_core_ratio(frame_bgr, x: int, y: int, width: int, height: int) -> flo
     return cv2.countNonZero(cv2.bitwise_or(red_low, red_high)) / float(width * height)
 
 
+def vivid_ripe_body_ratio(frame_bgr, x: int, y: int, width: int, height: int) -> float:
+    """Measure clearly ripe pink/red skin while excluding dry brown remnants."""
+    roi = frame_bgr[y : y + height, x : x + width]
+    if roi.size == 0:
+        return 0.0
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    # The broad mature-core mask intentionally supports shade and partial
+    # occlusion. This narrower saturated, bright mask is the final evidence
+    # that a counted region is ripe fruit skin rather than a brown flower,
+    # dry fruit, stem, or soil patch.
+    red_low = cv2.inRange(hsv, np.array([0, 115, 115]), np.array([12, 255, 255]))
+    red_high = cv2.inRange(
+        hsv, np.array([145, 115, 115]), np.array([180, 255, 255])
+    )
+    return cv2.countNonZero(cv2.bitwise_or(red_low, red_high)) / float(width * height)
+
+
 def validate_dragonfruit_maturity_scene(frame_bgr) -> dict:
     """Accept maturity detection only when dragon-fruit plant tissue is visible.
 
@@ -746,6 +764,13 @@ def is_countable_mature_dragonfruit(
     )
     ripe_red_ratio = cv2.countNonZero(ripe_red) / float(width * height)
     if ripe_red_ratio < 0.09:
+        return False
+
+    # Never count dried brown/grey remnants as harvest-mature fruit. A small
+    # real fruit needs a slightly larger vivid body share because background
+    # pixels take up more of its detector box.
+    minimum_vivid_ratio = 0.14 if min(width, height) < 40 else 0.10
+    if vivid_ripe_body_ratio(frame_bgr, x1, y1, width, height) < minimum_vivid_ratio:
         return False
 
     has_bracts = has_dragonfruit_bracts(frame_bgr, (x1, y1, x2, y2))
