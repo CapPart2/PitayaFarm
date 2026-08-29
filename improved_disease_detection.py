@@ -1130,10 +1130,6 @@ class ImprovedDiseaseDetection:
 
             if result.get("detected_diseases") and len(result["detected_diseases"]) > 1:
                 result["reason"] = "multiple_diseases"
-                result["message"] = (
-                    f"{len(result['detected_diseases'])} diseases detected - primary: "
-                    f"{result['detected_diseases'][0]['disease_name']}"
-                )
 
             return result
 
