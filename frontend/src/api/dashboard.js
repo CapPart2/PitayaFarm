@@ -11,6 +11,41 @@ const API_BASE = configuredDashboardUrl
     : `${configuredDashboardUrl}/api/dashboard`
   : '/api/dashboard';
 const REQUEST_TIMEOUT_MS = 12_000;
+const MEDIA_UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+
+async function uploadMedia(endpoint, form) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), MEDIA_UPLOAD_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      method: 'POST',
+      body: form,
+      headers: {
+        Accept: 'application/json',
+        ...getPitayaUserScopeHeaders(),
+      },
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => null);
+      throw new Error(errorData?.error || `Upload failed (HTTP ${response.status}).`);
+    }
+
+    return response.json();
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('Upload timed out. Use a shorter video or check your internet connection.')
+    }
+    if (error instanceof TypeError) {
+      throw new Error('Upload connection was interrupted. Check your internet connection and allow video access for PITAYA.')
+    }
+    throw error
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
 
 // Helper function for API calls
 async function apiCall(endpoint, options = {}) {
@@ -199,19 +234,7 @@ export async function uploadYieldImage(file, conf = 0.65, detectionMode = 'photo
     // box can be counted, which rejects background and dried plant regions.
     form.append('method', 'hybrid');
 
-    const response = await fetch(`${API_BASE}/yield-detect`, {
-      method: 'POST',
-      body: form,
-      headers: getPitayaUserScopeHeaders(),
-    });
-
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`HTTP ${response.status}: ${text}`);
-    }
-
-    const data = await response.json();
-    return data;
+    return await uploadMedia('/yield-detect', form);
   } catch (error) {
     console.warn('Yield image upload failed:', error.message);
     return { success: false, error: error.message };
@@ -228,19 +251,7 @@ export async function uploadYieldVideo(videoFile, conf = 0.65) {
     // strict ripe-body, bract, and cactus-context gate before counting.
     form.append('method', 'color');
 
-    const response = await fetch(`${API_BASE}/yield-video-detect`, {
-      method: 'POST',
-      body: form,
-      headers: getPitayaUserScopeHeaders(),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => null);
-      throw new Error(errorData?.error || `Video upload failed (HTTP ${response.status}).`);
-    }
-
-    const data = await response.json();
-    return data;
+    return await uploadMedia('/yield-video-detect', form);
   } catch (error) {
     console.warn('Yield video upload failed:', error.message);
     return { success: false, error: error.message };
