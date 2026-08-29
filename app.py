@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
 from functools import wraps
-from PIL import Image
+from PIL import Image, ImageOps
 from io import BytesIO
 import tensorflow as tf
 import keras
@@ -124,7 +124,7 @@ def validate_dragonfruit_stem_image(image_path):
     consequently rejected exactly those images before the disease model ran.
     """
     try:
-        image = Image.open(image_path).convert("RGB")
+        image = ImageOps.exif_transpose(Image.open(image_path)).convert("RGB")
         arr = np.array(image, dtype=np.uint8)
 
         gray_for_faces = cv2.cvtColor(arr, cv2.COLOR_RGB2GRAY)
@@ -134,12 +134,21 @@ def validate_dragonfruit_stem_image(image_path):
             minNeighbors=5,
             minSize=(40, 40),
         )
-        if len(faces) > 0:
+        image_area = float(arr.shape[0] * arr.shape[1])
+        face_area_ratio = 0.0
+        if len(faces) > 0 and image_area > 0:
+            face_area_ratio = max(
+                float(w * h) / image_area for (_, _, w, h) in faces
+            )
+        # False positives are common on lesion textures and crate patterns.
+        # Reject only when the detected face occupies a meaningful region.
+        if len(faces) > 0 and face_area_ratio >= 0.06:
             return {
                 "valid": False,
                 "document_like": False,
                 "reason": "person_detected",
                 "face_count": int(len(faces)),
+                "max_face_ratio": face_area_ratio,
             }
 
         r = arr[:, :, 0].astype(np.int16)

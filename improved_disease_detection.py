@@ -8,7 +8,7 @@ import json
 import os
 import keras
 import numpy as np
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 import logging
 import cv2
 
@@ -272,6 +272,8 @@ class ImprovedDiseaseDetection:
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
+            image = ImageOps.exif_transpose(image)
+
             # Match Disease.ipynb exactly. Older deployed models have no
             # metadata and continue to use their original 0-1 rescaling.
             image = image.resize(self.img_size, Image.Resampling.LANCZOS)
@@ -289,6 +291,7 @@ class ImprovedDiseaseDetection:
     def validate_target_subject(self, image):
         """Reject obvious non-plant/non-stem photos (e.g., paper/documents)."""
         try:
+            image = ImageOps.exif_transpose(image)
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
@@ -308,11 +311,18 @@ class ImprovedDiseaseDetection:
                 minNeighbors=5,
                 minSize=(40, 40),
             )
-            if len(faces) > 0:
+            image_area = float(img_array.shape[0] * img_array.shape[1])
+            max_face_ratio = 0.0
+            if len(faces) > 0 and image_area > 0:
+                max_face_ratio = max(
+                    float(w * h) / image_area for (_, _, w, h) in faces
+                )
+            if len(faces) > 0 and max_face_ratio >= 0.06:
                 return {
                     "is_target": False,
                     "reason": "person_detected",
                     "face_count": int(len(faces)),
+                    "max_face_ratio": max_face_ratio,
                 }
 
             hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
@@ -416,10 +426,19 @@ class ImprovedDiseaseDetection:
             return {"is_target": False, "reason": "validator_error"}
 
     def _find_foreign_subject(self, image_rgb):
-        """Find a person or central common object in a stem capture."""
+        """Find an unambiguous person or unrelated non-agricultural subject in a capture."""
         global OBJECT_GUARD_MODEL
         if not os.path.exists(OBJECT_GUARD_PATH):
             return None
+
+        # Disallowed YOLO COCO classes that represent non-plant scenes (people, electronics, vehicles)
+        # Avoid food classes (cake, sandwich, broccoli, etc.) which are common false positives on cut stems/fruit.
+        DISALLOWED_CLASSES = {
+            "person", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat",
+            "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe",
+            "backpack", "handbag", "suitcase", "laptop", "mouse", "remote", "keyboard",
+            "cell phone", "microwave", "oven", "toaster", "tv", "refrigerator", "book", "clock"
+        }
 
         try:
             if OBJECT_GUARD_MODEL is None:
@@ -429,19 +448,32 @@ class ImprovedDiseaseDetection:
 
             image_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
             result = OBJECT_GUARD_MODEL.predict(
-                image_bgr, conf=0.55, verbose=False
+                image_bgr, conf=0.60, verbose=False
             )[0]
             boxes = getattr(result, "boxes", None)
             if boxes is None or len(boxes) == 0:
                 return None
 
             height, width = image_rgb.shape[:2]
-            center_left, center_top = width * 0.2, height * 0.2
-            center_right, center_bottom = width * 0.8, height * 0.8
+            image_area = float(height * width)
+            center_left, center_top = width * 0.15, height * 0.15
+            center_right, center_bottom = width * 0.85, height * 0.85
             names = getattr(OBJECT_GUARD_MODEL, "names", {}) or {}
-            for box, class_id in zip(boxes.xyxy.tolist(), boxes.cls.tolist()):
+
+            for box, class_id, conf in zip(boxes.xyxy.tolist(), boxes.cls.tolist(), boxes.conf.tolist()):
                 label = str(names.get(int(class_id), "")).strip().lower()
+                if label not in DISALLOWED_CLASSES:
+                    continue
+
                 left, top, right, bottom = map(float, box)
+                box_area = (right - left) * (bottom - top)
+                box_area_ratio = box_area / image_area if image_area > 0 else 0
+
+                # Require meaningful size (at least 8% of image) for non-person objects, or 5% for person
+                min_ratio = 0.05 if label == "person" else 0.08
+                if box_area_ratio < min_ratio:
+                    continue
+
                 overlaps_center = (
                     right > center_left
                     and left < center_right
@@ -466,6 +498,7 @@ class ImprovedDiseaseDetection:
         place the stem.  Only that padded region is sent to the model.
         """
         try:
+            image = ImageOps.exif_transpose(image)
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
@@ -565,10 +598,11 @@ class ImprovedDiseaseDetection:
                 top = 0
                 bottom = height
 
-            # Reject an almost-full-frame component. It normally means a broad
-            # background scene instead of a close, focused stem capture.
+            # Reject an almost-full-frame component only when the actual stem component is too sparse.
+            # Real close-ups or cut stems across the frame can have a high bounding box ratio (>0.9)
+            # while still containing substantial stem tissue (e.g. 15-50%).
             roi_area_ratio = float((right - left) * (bottom - top)) / image_area
-            if roi_area_ratio > 0.92 and area_ratio < 0.45:
+            if roi_area_ratio > 0.95 and area_ratio < 0.08:
                 return None, {
                     "is_stem": False,
                     "reason": "stem_not_distinct_from_background",
@@ -811,16 +845,36 @@ class ImprovedDiseaseDetection:
         if not scored_diseases:
             return []
 
-        # Prefer a complete-stem diagnosis as the primary result. A disease
-        # classifier cannot establish a mixed infection from low-confidence
-        # tile labels alone, so return the strongest repeatable diagnosis.
+        # Prefer a complete-stem diagnosis as the primary result, unless a
+        # dominant localized lesion candidate has overwhelming tile consensus
+        # while the whole-stem prediction is weak or diluted.
         whole_stem_diseases = [
             disease for disease in scored_diseases
             if disease.get("evidence") == "whole_stem"
         ]
-        primary = (
-            whole_stem_diseases[0] if whole_stem_diseases else scored_diseases[0]
+        dominant_tile_disease = next(
+            (
+                d for d in scored_diseases
+                if d.get("evidence") != "whole_stem"
+                and d.get("tile_support", 0) >= 3
+                and (d.get("tile_average_confidence") or 0.0) >= 0.58
+            ),
+            None,
         )
+
+        if dominant_tile_disease and whole_stem_diseases:
+            whole_primary = whole_stem_diseases[0]
+            if (
+                whole_primary.get("tile_support", 0) <= 1
+                or (whole_primary.get("confidence") or 0.0) < 0.40
+            ) and dominant_tile_disease.get("tile_support", 0) >= whole_primary.get("tile_support", 0) + 2:
+                primary = dominant_tile_disease
+            else:
+                primary = whole_primary
+        elif whole_stem_diseases:
+            primary = whole_stem_diseases[0]
+        else:
+            primary = scored_diseases[0]
         additional = []
         for disease in scored_diseases:
             if disease["disease_name"] == primary["disease_name"]:
@@ -1182,7 +1236,7 @@ def create_improved_predict_function():
         """Predict disease from uploaded image file with improved accuracy"""
         try:
             # Read image
-            image = Image.open(image_file)
+            image = ImageOps.exif_transpose(Image.open(image_file))
 
             # Make prediction
             result = detector.predict_disease(image)
