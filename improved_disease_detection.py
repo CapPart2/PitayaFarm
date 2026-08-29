@@ -436,6 +436,19 @@ class ImprovedDiseaseDetection:
             right = min(width, x + component_width + padding)
             bottom = min(height, y + component_height + padding)
 
+            # Bright field foliage can join the intended stem into one
+            # full-frame green/brown component. In that case, retain the
+            # guided central stem area rather than sending the full background
+            # scene to the classifier.
+            full_frame_component = area_ratio >= 0.75
+            if full_frame_component:
+                stem_band_width = max(int(width * 0.45), 64)
+                left = max(0, int(center_x - (stem_band_width / 2)))
+                right = min(width, left + stem_band_width)
+                left = max(0, right - stem_band_width)
+                top = 0
+                bottom = height
+
             # Reject an almost-full-frame component. It normally means a broad
             # background scene instead of a close, focused stem capture.
             roi_area_ratio = float((right - left) * (bottom - top)) / image_area
@@ -477,6 +490,10 @@ class ImprovedDiseaseDetection:
             focus_crop = focus_mask[top:bottom, left:right] > 0
             rgb_crop = rgb[top:bottom, left:right].copy()
             fill_colour = np.median(rgb[component_mask > 0], axis=0).astype(np.uint8)
+            if full_frame_component:
+                # The connected-component mask contains foliage in this
+                # fallback path, so the centred crop is the reliable focus.
+                focus_crop = np.ones(rgb_crop.shape[:2], dtype=bool)
             rgb_crop[~focus_crop] = fill_colour
 
             return Image.fromarray(rgb_crop), {
@@ -486,6 +503,7 @@ class ImprovedDiseaseDetection:
                 "centre_distance": centre_distance,
                 "bbox": [left, top, right, bottom],
                 "background_masked": True,
+                "used_centered_stem_band": full_frame_component,
                 "lesion_pixels_preserved": True,
             }
         except Exception as exc:
