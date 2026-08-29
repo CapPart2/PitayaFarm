@@ -873,43 +873,13 @@ class ImprovedDiseaseDetection:
             primary = whole_stem_diseases[0]
         else:
             primary = scored_diseases[0]
-        additional = []
-        primary_tile_count = primary.get("tile_support", 0)
-        for disease in scored_diseases:
-            if disease["disease_name"] == primary["disease_name"]:
-                continue
-
-            sec_tile_count = disease.get("tile_support", 0)
-            sec_tile_conf = disease.get("tile_confidence") or 0.0
-            sec_tile_avg = disease.get("tile_average_confidence") or 0.0
-            sec_whole_conf = disease.get("whole_image_confidence")
-
-            # Avoid false co-infections caused by tile edges on necrotic lesions.
-            # If the primary disease is overwhelmingly dominant across tiles,
-            # minor runner-up tile clusters are lesion boundary artifacts.
-            if primary_tile_count >= 10 and sec_tile_count < 5:
-                continue
-            if primary_tile_count >= 3 * sec_tile_count and sec_whole_conf is None:
-                continue
-
-            # A secondary disease must be localised repeatedly and with a
-            # strong score. Whole-image runner-up probabilities never qualify
-            # by themselves because the model has correlated disease labels.
-            min_tile_count = self.secondary_tile_count if sec_whole_conf is not None else self.secondary_tile_count + 1
-            if (
-                sec_tile_count >= min_tile_count
-                and sec_tile_conf >= self.secondary_tile_confidence
-                and sec_tile_avg >= self.secondary_tile_average
-            ):
-                additional.append(
-                    {
-                        **disease,
-                        "confidence": sec_tile_avg,
-                        "evidence": "localized_tiles",
-                    }
-                )
-
-        return [primary, *additional[:2]]
+        # Each source image in oversample/Leaf belongs to exactly one class.
+        # The deployed model consequently produces a mutually exclusive
+        # diagnosis, not a multi-label disease assessment. Overlapping crop
+        # tiles can label parts of one lesion as another disease, so exposing
+        # secondary tile labels creates false Brown Spot/Soft Rot reports.
+        # Return only the diagnosis with the strongest whole-stem/tile evidence.
+        return [primary]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
