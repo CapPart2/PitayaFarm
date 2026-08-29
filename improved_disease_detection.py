@@ -61,6 +61,11 @@ class ImprovedDiseaseDetection:
         # field image. Subject validation and the class floor above are the
         # primary safeguards against unrelated uploads.
         self.min_confidence_gap = 0.02
+        # The classifier was trained only on disease classes, so a field image
+        # can distribute probability across similar diseases.  A lower score
+        # is useful only when independent, overlapping stem tiles agree.
+        self.tile_confirmation_confidence = 0.18
+        self.tile_confirmation_count = 2
 
     def required_confidence(self, disease_name, quality_score):
         """Return one consistent confidence floor for every prediction path."""
@@ -511,7 +516,8 @@ class ImprovedDiseaseDetection:
         }
 
     def _extract_candidates_from_predictions(
-        self, predictions, quality_score, source_tag
+        self, predictions, quality_score, source_tag, minimum_confidence=None,
+        max_candidates=4,
     ):
         """Turn one prediction vector into one or more disease candidates."""
         all_predictions = self._build_prediction_summary(predictions)
@@ -520,12 +526,17 @@ class ImprovedDiseaseDetection:
         )
 
         candidates = []
-        for disease_name, confidence in sorted_predictions[:4]:
+        for disease_name, confidence in sorted_predictions[:max_candidates]:
             required_confidence = self.required_confidence(
                 disease_name, quality_score
             )
 
-            if confidence < required_confidence:
+            candidate_floor = (
+                min(required_confidence, minimum_confidence)
+                if minimum_confidence is not None
+                else required_confidence
+            )
+            if confidence < candidate_floor:
                 continue
 
             candidates.append(
@@ -593,10 +604,15 @@ class ImprovedDiseaseDetection:
             # stem and therefore be weak in the full-stem prediction.  Require
             # two distinct tiles and a stronger tile score before surfacing it.
             secondary_floor = max(
-                self.confidence_thresholds.get(disease_name, self.min_confidence),
-                0.45,
+                self.confidence_thresholds.get(disease_name, self.min_confidence)
+                * 0.75,
+                self.tile_confirmation_confidence,
             )
-            if tile_support >= 2 and tile_average is not None and tile_average >= secondary_floor:
+            if (
+                tile_support >= self.tile_confirmation_count
+                and tile_average is not None
+                and tile_average >= secondary_floor
+            ):
                 scored_diseases.append(
                     {
                         "disease_name": disease_name,
@@ -617,9 +633,9 @@ class ImprovedDiseaseDetection:
         if not scored_diseases:
             return []
 
-        # Prefer a complete-stem diagnosis as the primary result. Additional
-        # labels need independent tile evidence; multiple softmax values from
-        # the same full-stem image are not proof of multiple infections.
+        # Prefer a complete-stem diagnosis as the primary result. A disease
+        # classifier cannot establish a mixed infection from low-confidence
+        # tile labels alone, so return the strongest repeatable diagnosis.
         whole_stem_diseases = [
             disease for disease in scored_diseases
             if disease.get("evidence") == "whole_stem"
@@ -627,12 +643,7 @@ class ImprovedDiseaseDetection:
         primary = (
             whole_stem_diseases[0] if whole_stem_diseases else scored_diseases[0]
         )
-        additional = [
-            disease for disease in scored_diseases
-            if disease["disease_name"] != primary["disease_name"]
-            and disease.get("tile_support", 0) >= 2
-        ]
-        return [primary, *additional[:2]]
+        return [primary]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
@@ -838,6 +849,8 @@ class ImprovedDiseaseDetection:
                     predictions,
                     tile_quality["quality_score"],
                     f"tile_{tile_index}",
+                    self.tile_confirmation_confidence,
+                    max_candidates=1,
                 )
 
                 tile_predictions.append(sorted_predictions[:3])
