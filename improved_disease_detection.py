@@ -4,8 +4,8 @@ Improved Disease Detection System
 Fixes accuracy issues with proper preprocessing, confidence thresholds, and validation
 """
 
+import json
 import os
-import tensorflow as tf
 import keras
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
@@ -24,6 +24,8 @@ class ImprovedDiseaseDetection:
 
     def __init__(self):
         self.model = None
+        self.preprocessing = "rescale_255"
+        self.calibration_temperature = 1.0
         self.class_names = [
             "Anthracnose",
             "Black Spot",
@@ -66,6 +68,7 @@ class ImprovedDiseaseDetection:
         # is useful only when independent, overlapping stem tiles agree.
         self.tile_confirmation_confidence = 0.18
         self.tile_confirmation_count = 2
+        self.multi_disease_confidence = 0.50
 
     def required_confidence(self, disease_name, quality_score):
         """Return one consistent confidence floor for every prediction path."""
@@ -88,6 +91,7 @@ class ImprovedDiseaseDetection:
                         # The .keras file was saved with Keras 3, so use its
                         # native loader instead of the legacy tf.keras loader.
                         self.model = keras.models.load_model(model_path, compile=False)
+                        self._load_model_metadata()
                         logger.info(f"Loaded model: {model_path}")
                         logger.info(f"   Input shape: {self.model.input_shape}")
                         logger.info(f"   Output shape: {self.model.output_shape}")
@@ -103,6 +107,27 @@ class ImprovedDiseaseDetection:
         except Exception as e:
             logger.error(f"Error loading model: {str(e)}")
             return False
+
+    def _load_model_metadata(self):
+        """Load preprocessing and calibration created by Disease.ipynb."""
+        metadata_path = "disease_model_metadata.json"
+        if not os.path.exists(metadata_path):
+            return
+
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as metadata_file:
+                metadata = json.load(metadata_file)
+
+            if metadata.get("class_names") != self.class_names:
+                logger.warning("Ignoring metadata with a different class order")
+                return
+
+            if metadata.get("preprocessing") == "mobilenet_v2":
+                self.preprocessing = "mobilenet_v2"
+            temperature = float(metadata.get("temperature", 1.0))
+            self.calibration_temperature = min(max(temperature, 0.05), 10.0)
+        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            logger.warning(f"Could not load model metadata: {exc}")
 
     def enhance_image(self, image):
         """Enhance image quality before preprocessing"""
@@ -190,12 +215,15 @@ class ImprovedDiseaseDetection:
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
-            # Disease.ipynb trains with ImageDataGenerator(rescale=1./255).
-            # Contrast enhancement, sharpening, and histogram equalisation
-            # were not training transformations and shift real uploads away
-            # from the distribution the model learned.
+            # Match Disease.ipynb exactly. Older deployed models have no
+            # metadata and continue to use their original 0-1 rescaling.
             image = image.resize(self.img_size, Image.Resampling.LANCZOS)
-            return np.expand_dims(np.asarray(image, dtype=np.float32) / 255.0, axis=0)
+            image_array = np.asarray(image, dtype=np.float32)
+            if self.preprocessing == "mobilenet_v2":
+                image_array = (image_array / 127.5) - 1.0
+            else:
+                image_array /= 255.0
+            return np.expand_dims(image_array, axis=0)
 
         except Exception as e:
             logger.error(f"Error preprocessing image: {str(e)}")
@@ -515,6 +543,17 @@ class ImprovedDiseaseDetection:
             for i in range(len(self.class_names))
         }
 
+    def calibrate_predictions(self, predictions):
+        """Apply validation-set temperature scaling from Disease.ipynb."""
+        if self.calibration_temperature == 1.0:
+            return predictions
+
+        logits = np.log(np.clip(predictions, 1e-7, 1.0))
+        logits /= self.calibration_temperature
+        logits -= np.max(logits, axis=1, keepdims=True)
+        probabilities = np.exp(logits)
+        return probabilities / np.sum(probabilities, axis=1, keepdims=True)
+
     def _extract_candidates_from_predictions(
         self, predictions, quality_score, source_tag, minimum_confidence=None,
         max_candidates=4,
@@ -643,7 +682,13 @@ class ImprovedDiseaseDetection:
         primary = (
             whole_stem_diseases[0] if whole_stem_diseases else scored_diseases[0]
         )
-        return [primary]
+        additional = [
+            disease for disease in scored_diseases
+            if disease["disease_name"] != primary["disease_name"]
+            and disease.get("evidence") == "two_tiles"
+            and disease["confidence"] >= self.multi_disease_confidence
+        ]
+        return [primary, *additional[:2]]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
@@ -824,7 +869,9 @@ class ImprovedDiseaseDetection:
             if processed_image is None:
                 return {"success": False, "error": "Failed to preprocess image"}
 
-            whole_image_predictions = self.model.predict(processed_image, verbose=0)
+            whole_image_predictions = self.calibrate_predictions(
+                self.model.predict(processed_image, verbose=0)
+            )
             whole_sorted_predictions, whole_candidates = (
                 self._extract_candidates_from_predictions(
                     whole_image_predictions,
@@ -844,7 +891,9 @@ class ImprovedDiseaseDetection:
                 if tile_input is None:
                     continue
 
-                predictions = self.model.predict(tile_input, verbose=0)
+                predictions = self.calibrate_predictions(
+                    self.model.predict(tile_input, verbose=0)
+                )
                 sorted_predictions, candidates = self._extract_candidates_from_predictions(
                     predictions,
                     tile_quality["quality_score"],
