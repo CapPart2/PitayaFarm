@@ -29,7 +29,7 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from database_models import db_manager
 
 import base64
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 import cv2
 import numpy as np
 import subprocess
@@ -104,6 +104,23 @@ NO_MATURE_DETECTION_MESSAGE = "No mature detection found."
 # "background" label to correct a low-confidence guess.  Do not permit clients
 # to lower this threshold for records that may be saved as yield data.
 MIN_MATURE_CONFIDENCE = 0.65
+MATURE_IMAGE_INFERENCE_LONG_SIDE = 1280
+
+
+def prepare_mature_image_inference_frame(frame_bgr):
+    """Normalize still-image resolution so counts do not depend on device pixels."""
+    height, width = frame_bgr.shape[:2]
+    longest_side = max(width, height)
+    if longest_side == MATURE_IMAGE_INFERENCE_LONG_SIDE:
+        return frame_bgr, 1.0, 1.0
+
+    scale = MATURE_IMAGE_INFERENCE_LONG_SIDE / float(longest_side)
+    resized = cv2.resize(
+        frame_bgr,
+        (max(1, round(width * scale)), max(1, round(height * scale))),
+        interpolation=cv2.INTER_AREA if scale < 1.0 else cv2.INTER_CUBIC,
+    )
+    return resized, width / float(resized.shape[1]), height / float(resized.shape[0])
 
 
 def mature_confidence_threshold(
@@ -3798,6 +3815,14 @@ def yield_image_detect():
         img_path = os.path.join(save_dir, f"{uuid.uuid4().hex}_{filename}")
         img_file.save(img_path)
 
+        # Phone cameras may store an EXIF orientation while the displayed
+        # preview is already upright. OpenCV and YOLO do not consistently
+        # apply that metadata, so normalize the saved file once before both
+        # image detection paths read the pixels.
+        with Image.open(img_path) as uploaded_image:
+            normalized_image = ImageOps.exif_transpose(uploaded_image).convert("RGB")
+            normalized_image.save(img_path)
+
         # The strict fruit-region detector checks ripe colour, compact shape,
         # plant context and fruit bracts.  This avoids whole-plant boxes from
         # the available YOLO weights and rejects unrelated pink/red objects.
@@ -3829,11 +3854,14 @@ def yield_image_detect():
                 jsonify({"success": False, "error": "Failed to read saved image"}),
                 400,
             )
+        inference_frame_bgr, box_scale_x, box_scale_y = (
+            prepare_mature_image_inference_frame(frame_bgr)
+        )
 
         # Keep scene information for diagnostics, but do not reject an entire
         # image before the trained detector sees it. A close-up can contain a
         # real ripe fruit with little visible green plant tissue.
-        scene_validation = validate_dragonfruit_maturity_scene(frame_bgr)
+        scene_validation = validate_dragonfruit_maturity_scene(inference_frame_bgr)
 
         detections = []
         # The colour/shape detector supplies reliable proposals for field
@@ -3843,10 +3871,10 @@ def yield_image_detect():
             detections = [
                 detection
                 for detection in detect_focused_mature_fruits(
-                    frame_bgr, image_mode=True
+                    inference_frame_bgr, image_mode=True
                 )
                 if float(detection.get("confidence", 0.0)) >= conf
-                and is_precise_image_mature_fruit(frame_bgr, detection)
+                and is_precise_image_mature_fruit(inference_frame_bgr, detection)
             ]
 
         # The colour detector is reliable for clear, close fruit but loses
@@ -3861,7 +3889,7 @@ def yield_image_detect():
                 model = load_yolo_model()
                 results = list(
                     model.predict(
-                        source=img_path,
+                        source=inference_frame_bgr,
                         # Preserve detail from far fruit rather than shrinking
                         # every photo to the model's 640 px training size.
                         imgsz=960,
@@ -3876,9 +3904,6 @@ def yield_image_detect():
             r = results[0] if results else None
             boxes = getattr(r, "boxes", None) if r is not None else None
             mature_class_ids = get_mature_class_ids(model)
-            if r is not None and getattr(r, "orig_img", None) is not None:
-                frame_bgr = r.orig_img
-
             if boxes is not None and len(boxes) > 0:
                 for b, c, cl in zip(
                     boxes.xyxy.tolist(), boxes.conf.tolist(), boxes.cls.tolist()
@@ -3886,7 +3911,9 @@ def yield_image_detect():
                     if int(cl) not in mature_class_ids:
                         continue
                     x1, y1, x2, y2 = map(float, b)
-                    frame_area = float(frame_bgr.shape[0] * frame_bgr.shape[1])
+                    frame_area = float(
+                        inference_frame_bgr.shape[0] * inference_frame_bgr.shape[1]
+                    )
                     # A one-class detector may occasionally return one box
                     # around an entire plant. It cannot represent one fruit.
                     if (
@@ -3896,7 +3923,7 @@ def yield_image_detect():
                     ):
                         continue
                     if not is_precise_image_mature_fruit(
-                        frame_bgr,
+                        inference_frame_bgr,
                         {"box": b, "confidence": float(c)},
                     ):
                         continue
@@ -3911,6 +3938,14 @@ def yield_image_detect():
                     )
 
         detections = suppress_overlapping_detections(detections)
+        for detection in detections:
+            x1, y1, x2, y2 = detection["box"]
+            detection["box"] = [
+                float(x1 * box_scale_x),
+                float(y1 * box_scale_y),
+                float(x2 * box_scale_x),
+                float(y2 * box_scale_y),
+            ]
 
         # Create annotated image (PIL)
         pil = Image.open(img_path).convert("RGB")

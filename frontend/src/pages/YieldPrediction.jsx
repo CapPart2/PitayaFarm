@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { useEffect, useRef, useState } from 'react'
 import { Image, Video } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
 import {
     Bar,
     BarChart,
