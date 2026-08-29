@@ -306,14 +306,18 @@ def vivid_ripe_body_ratio(frame_bgr, x: int, y: int, width: int, height: int) ->
 
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     # The broad mature-core mask intentionally supports shade and partial
-    # occlusion. This narrower saturated, bright mask is the final evidence
-    # that a counted region is ripe fruit skin rather than a brown flower,
-    # dry fruit, stem, or soil patch.
-    red_low = cv2.inRange(hsv, np.array([0, 115, 100]), np.array([18, 255, 255]))
+    # occlusion. This final measurement supports both vivid red fruit and
+    # the bright pale-salmon skin produced by direct sunlight, while keeping
+    # dark dried brown flowers, stems, and soil outside the ripe range.
+    red_low = cv2.inRange(hsv, np.array([0, 100, 125]), np.array([12, 255, 255]))
     red_high = cv2.inRange(
-        hsv, np.array([138, 115, 100]), np.array([180, 255, 255])
+        hsv, np.array([145, 100, 125]), np.array([180, 255, 255])
     )
-    return cv2.countNonZero(cv2.bitwise_or(red_low, red_high)) / float(width * height)
+    pale_salmon = cv2.inRange(
+        hsv, np.array([0, 70, 145]), np.array([25, 210, 255])
+    )
+    ripe_mask = cv2.bitwise_or(cv2.bitwise_or(red_low, red_high), pale_salmon)
+    return cv2.countNonZero(ripe_mask) / float(width * height)
 
 
 
