@@ -57,12 +57,13 @@ class ImprovedDiseaseDetection:
             "White Spot": 0.25,
         }
 
-        # Minimum confidence for any disease detection.
+        # The model has one disease label per image. Only report that main
+        # disease when its score and separation from the runner-up are strong
+        # enough to be useful to a farmer. These values retain the labelled
+        # Black Spot test predictions while rejecting ambiguous field photos.
         self.min_confidence = 0.25
-        # Do not require an unrealistically large softmax gap for a real
-        # field image. Subject validation and the class floor above are the
-        # primary safeguards against unrelated uploads.
-        self.min_confidence_gap = 0.02
+        self.primary_confidence_threshold = 0.55
+        self.primary_confidence_gap = 0.10
         # The classifier was trained only on disease classes, so a field image
         # can distribute probability across similar diseases.  A lower score
         # is useful only when independent, overlapping stem tiles agree.
@@ -82,6 +83,30 @@ class ImprovedDiseaseDetection:
         # avoids a second, stricter fallback rule cancelling a valid result.
         quality_multiplier = 1.0 + max(0.0, 0.35 - float(quality_score)) * 0.10
         return base_threshold * quality_multiplier
+
+    def is_reliable_primary(self, predictions, quality_score):
+        """Return whether the top model label is reliable enough to report."""
+        sorted_predictions = sorted(
+            self._build_prediction_summary(predictions).items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if not sorted_predictions:
+            return False
+
+        top_disease_name, top_confidence = sorted_predictions[0]
+        second_confidence = (
+            sorted_predictions[1][1] if len(sorted_predictions) > 1 else 0.0
+        )
+        required_confidence = max(
+            self.required_confidence(top_disease_name, quality_score),
+            self.primary_confidence_threshold,
+        )
+        return (
+            top_confidence >= required_confidence
+            and top_confidence - second_confidence
+            >= self.primary_confidence_gap
+        )
 
     def load_model(self):
         """Load the best available model"""
@@ -703,14 +728,11 @@ class ImprovedDiseaseDetection:
         primary = (
             whole_stem_diseases[0] if whole_stem_diseases else scored_diseases[0]
         )
-        additional = [
-            disease for disease in scored_diseases
-            if disease["disease_name"] != primary["disease_name"]
-            and disease.get("tile_support", 0) >= self.tile_confirmation_count
-            and disease.get("tile_confidence", 0) >= self.multi_disease_confidence
-            and disease["confidence"] >= self.multi_disease_confidence
-        ]
-        return [primary, *additional[:2]]
+        # This classifier is trained with exactly one label per image. Tile
+        # predictions can corroborate the primary label, but cannot prove a
+        # second disease. Returning only the best diagnosis avoids presenting
+        # correlated runner-up probabilities as multiple infections.
+        return [primary]
 
     def validate_prediction(self, predictions, quality_score):
         """Enhanced prediction validation with multi-disease support"""
@@ -756,14 +778,15 @@ class ImprovedDiseaseDetection:
 
             # If the best class is clearly above the runner-up and meets its class
             # threshold, return it as a single detection.
-            top_required_confidence = self.required_confidence(
-                top_disease_name, quality_score
+            top_required_confidence = max(
+                self.required_confidence(top_disease_name, quality_score),
+                self.primary_confidence_threshold,
             )
             confidence_gap = top_confidence - second_confidence
 
             if (
                 top_confidence >= top_required_confidence
-                and confidence_gap >= self.min_confidence_gap
+                and confidence_gap >= self.primary_confidence_gap
             ):
                 detected_diseases = [
                     {
@@ -938,14 +961,8 @@ class ImprovedDiseaseDetection:
                 and detected_diseases[0].get("evidence") == "whole_stem"
                 and len(whole_sorted_predictions) >= 2
             ):
-                top_name, top_confidence = whole_sorted_predictions[0]
-                second_confidence = whole_sorted_predictions[1][1]
-                required_confidence = self.required_confidence(
-                    top_name, quality["quality_score"]
-                )
-                if (
-                    top_confidence < required_confidence
-                    or top_confidence - second_confidence < self.min_confidence_gap
+                if not self.is_reliable_primary(
+                    whole_image_predictions, quality["quality_score"]
                 ):
                     detected_diseases = []
 
